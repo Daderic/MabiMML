@@ -152,7 +152,7 @@ export default {
         onMounted(async () => {
             try {
                 context.value = new AudioContext();
-                await context.value.audioWorklet.addModule("../worklet_processor.min.js");
+                await context.value.audioWorklet.addModule("/worklet_processor.min.js");
                 const soundFontArrayBuffer = await loadSoundFont(selectedInstrument.value);
                 if (!soundFontArrayBuffer) return;
                 synth.value = new Synthetizer(context.value.destination, soundFontArrayBuffer, true, undefined, {chorusEnabled: false, reverbEnabled: false});
