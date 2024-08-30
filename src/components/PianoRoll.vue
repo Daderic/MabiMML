@@ -60,55 +60,55 @@ export default {
         const synth = ref(null);
         const context = ref(null);
         const isMouseDown = ref(false);
-        const selectedInstrument = ref({ name: 'Piano', sf2: '/soundfonts/piano.sf2' });
+        const selectedInstrument = ref({ name: 'Piano', sf2: '../soundfonts/piano.sf2' });
         const midiBuilder = ref(null);
 
         const instruments = ref([
-            { name: 'Piano', sf2: '/soundfonts/piano.sf2' },
-            { name: 'Harp', sf2: '/soundfonts/harp.sf2' },
-            { name: 'Lyre', sf2: '/soundfonts/lyre.sf2' },
-            { name: 'Lute', sf2: '/soundfonts/lute.sf2' },
-            { name: 'Ukulele', sf2: '/soundfonts/ukulele.sf2' },
-            { name: 'Mandolin', sf2: '/soundfonts/mandolin.sf2' },
-            { name: 'Electric Guitar', sf2: '/soundfonts/electric_guitar.sf2' },
-            { name: 'Violin', sf2: '/soundfonts/violin.sf2' },
-            { name: 'Cello', sf2: '/soundfonts/cello.sf2' },
-            { name: 'Flute', sf2: '/soundfonts/flute.sf2' },
-            { name: 'Whistle', sf2: '/soundfonts/whistle.sf2' },
-            { name: 'Chalumeau', sf2: '/soundfonts/chalumeau.sf2' },
-            { name: 'Roncadora', sf2: '/soundfonts/roncadora.sf2' },
-            { name: 'Physis Tuba', sf2: '/soundfonts/tuba.sf2' },
-            { name: 'Festival Lute', sf2: '/soundfonts/festival_lute.sf2' },
-            { name: 'Festival Ukulele', sf2: '/soundfonts/festival_ukulele.sf2' },
-            { name: 'Festival Mandolin', sf2: '/soundfonts/festival_mandolin.sf2' },
-            { name: 'Fest/Tuned Flute', sf2: '/soundfonts/festival_flute.sf2' },
-            { name: 'Fest/Tuned Whistle', sf2: '/soundfonts/festival_whistle.sf2' },
-            { name: 'Tuned Violin', sf2: '/soundfonts/tuned_violin.sf2' },
-            { name: 'Tuned Cello', sf2: '/soundfonts/tuned_cello.sf2' },
-            { name: 'Drum Kit', sf2: '/soundfonts/drum_kit.sf2' },
-            { name: 'Bass Drum', sf2: '/soundfonts/bass_drum.sf2' },
-            { name: 'Snare Drum', sf2: '/soundfonts/snare_drum.sf2' },
-            { name: 'Cymbals', sf2: '/soundfonts/cymbals.sf2' },
-            { name: 'Hand Chimes', sf2: '/soundfonts/hand_chimes.sf2' },
-            { name: 'Male Voice', sf2: '/soundfonts/male_voice.sf2' },
-            { name: 'Male Chorus', sf2: '/soundfonts/male_chorus.sf2' },
-            { name: 'Female Voice', sf2: '/soundfonts/female_voice.sf2' },
-            { name: 'Female Chorus', sf2: '/soundfonts/female_chorus.sf2' },
-            { name: "'C' Tone Bottle", sf2: '/soundfonts/c_tone_bottle.sf2' },
-            { name: "'D' Tone Bottle", sf2: '/soundfonts/d_tone_bottle.sf2' },
-            { name: "'E' Tone Bottle", sf2: '/soundfonts/e_tone_bottle.sf2' },
-            { name: "'F' Tone Bottle", sf2: '/soundfonts/f_tone_bottle.sf2' },
-            { name: "'G' Tone Bottle", sf2: '/soundfonts/g_tone_bottle.sf2' },
-            { name: "'A' Tone Bottle", sf2: '/soundfonts/a_tone_bottle.sf2' },
-            { name: "'B' Tone Bottle", sf2: '/soundfonts/b_tone_bottle.sf2' },
-            { name: "'C' Tone Handbell", sf2: '/soundfonts/c_tone_handbell.sf2' },
-            { name: "'D' Tone Handbell", sf2: '/soundfonts/d_tone_handbell.sf2' },
-            { name: "'E' Tone Handbell", sf2: '/soundfonts/e_tone_handbell.sf2' },
-            { name: "'F' Tone Handbell", sf2: '/soundfonts/f_tone_handbell.sf2' },
-            { name: "'G' Tone Handbell", sf2: '/soundfonts/g_tone_handbell.sf2' },
-            { name: "'A' Tone Handbell", sf2: '/soundfonts/a_tone_handbell.sf2' },
-            { name: "'B' Tone Handbell", sf2: '/soundfonts/b_tone_handbell.sf2' },
-            { name: 'High \'C\' Tone Handbell', sf2: '/soundfonts/high_c_tone_handbell.sf2' }
+            { name: 'Piano', sf2: '../soundfonts/piano.sf2' },
+            { name: 'Harp', sf2: '../soundfonts/harp.sf2' },
+            { name: 'Lyre', sf2: '../soundfonts/lyre.sf2' },
+            { name: 'Lute', sf2: '../soundfonts/lute.sf2' },
+            { name: 'Ukulele', sf2: '../soundfonts/ukulele.sf2' },
+            { name: 'Mandolin', sf2: '../soundfonts/mandolin.sf2' },
+            { name: 'Electric Guitar', sf2: '../soundfonts/electric_guitar.sf2' },
+            { name: 'Violin', sf2: '../soundfonts/violin.sf2' },
+            { name: 'Cello', sf2: '../soundfonts/cello.sf2' },
+            { name: 'Flute', sf2: '../soundfonts/flute.sf2' },
+            { name: 'Whistle', sf2: '../soundfonts/whistle.sf2' },
+            { name: 'Chalumeau', sf2: '../soundfonts/chalumeau.sf2' },
+            { name: 'Roncadora', sf2: '../soundfonts/roncadora.sf2' },
+            { name: 'Physis Tuba', sf2: '../soundfonts/tuba.sf2' },
+            { name: 'Festival Lute', sf2: '../soundfonts/festival_lute.sf2' },
+            { name: 'Festival Ukulele', sf2: '../soundfonts/festival_ukulele.sf2' },
+            { name: 'Festival Mandolin', sf2: '../soundfonts/festival_mandolin.sf2' },
+            { name: 'Fest/Tuned Flute', sf2: '../soundfonts/festival_flute.sf2' },
+            { name: 'Fest/Tuned Whistle', sf2: '../soundfonts/festival_whistle.sf2' },
+            { name: 'Tuned Violin', sf2: '../soundfonts/tuned_violin.sf2' },
+            { name: 'Tuned Cello', sf2: '../soundfonts/tuned_cello.sf2' },
+            { name: 'Drum Kit', sf2: '../soundfonts/drum_kit.sf2' },
+            { name: 'Bass Drum', sf2: '../soundfonts/bass_drum.sf2' },
+            { name: 'Snare Drum', sf2: '../soundfonts/snare_drum.sf2' },
+            { name: 'Cymbals', sf2: '../soundfonts/cymbals.sf2' },
+            { name: 'Hand Chimes', sf2: '../soundfonts/hand_chimes.sf2' },
+            { name: 'Male Voice', sf2: '../soundfonts/male_voice.sf2' },
+            { name: 'Male Chorus', sf2: '../soundfonts/male_chorus.sf2' },
+            { name: 'Female Voice', sf2: '../soundfonts/female_voice.sf2' },
+            { name: 'Female Chorus', sf2: '../soundfonts/female_chorus.sf2' },
+            { name: "'C' Tone Bottle", sf2: '../soundfonts/c_tone_bottle.sf2' },
+            { name: "'D' Tone Bottle", sf2: '../soundfonts/d_tone_bottle.sf2' },
+            { name: "'E' Tone Bottle", sf2: '../soundfonts/e_tone_bottle.sf2' },
+            { name: "'F' Tone Bottle", sf2: '../soundfonts/f_tone_bottle.sf2' },
+            { name: "'G' Tone Bottle", sf2: '../soundfonts/g_tone_bottle.sf2' },
+            { name: "'A' Tone Bottle", sf2: '../soundfonts/a_tone_bottle.sf2' },
+            { name: "'B' Tone Bottle", sf2: '../soundfonts/b_tone_bottle.sf2' },
+            { name: "'C' Tone Handbell", sf2: '../soundfonts/c_tone_handbell.sf2' },
+            { name: "'D' Tone Handbell", sf2: '../soundfonts/d_tone_handbell.sf2' },
+            { name: "'E' Tone Handbell", sf2: '../soundfonts/e_tone_handbell.sf2' },
+            { name: "'F' Tone Handbell", sf2: '../soundfonts/f_tone_handbell.sf2' },
+            { name: "'G' Tone Handbell", sf2: '../soundfonts/g_tone_handbell.sf2' },
+            { name: "'A' Tone Handbell", sf2: '../soundfonts/a_tone_handbell.sf2' },
+            { name: "'B' Tone Handbell", sf2: '../soundfonts/b_tone_handbell.sf2' },
+            { name: 'High \'C\' Tone Handbell', sf2: '../soundfonts/high_c_tone_handbell.sf2' }
         ]);
 
         var currentNoteLength = ref(16);
@@ -152,7 +152,7 @@ export default {
         onMounted(async () => {
             try {
                 context.value = new AudioContext();
-                await context.value.audioWorklet.addModule("/worklet_processor.min.js");
+                await context.value.audioWorklet.addModule("../worklet_processor.min.js");
                 const soundFontArrayBuffer = await loadSoundFont(selectedInstrument.value);
                 if (!soundFontArrayBuffer) return;
                 synth.value = new Synthetizer(context.value.destination, soundFontArrayBuffer, true, undefined, {chorusEnabled: false, reverbEnabled: false});
