@@ -1,5 +1,5 @@
 <template>
-  <img alt="Vue logo" src="./assets/logo.png">
+  <!--img alt="Vue logo" src="./assets/logo.png"></!-->
   <div id="app">
     <PatternEditor />
   </div>
@@ -24,6 +24,11 @@ export default {
     -moz-osx-font-smoothing: grayscale;
     text-align: center;
     color: #2c3e50;
-    margin-top: 60px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 100%;
+    background-color: #ddd;
   }
 </style>

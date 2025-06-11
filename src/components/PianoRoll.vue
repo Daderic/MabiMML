@@ -104,7 +104,7 @@
 
             </div>
             <div class="grid-wrapper">
-                <div class="grid" ref="grid" :style="{ width: gridSpan*zoomScalar + 'px', background: backgroundStyle.background }" @mousedown.left="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll">
+                <!-- <div class="grid" ref="grid" :style="{ width: gridSpan*zoomScalar + 'px', background: backgroundStyle.background }" @mousedown.left="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll">
                     <div v-for="note in notesInGrid" :key="note.id" class="note"
                         :style="{
                             left: note.left*zoomScalar + 'px',
@@ -122,8 +122,12 @@
                         @mouseover="removeNote(note, false, $event)">
                         <div class="resize-handle" @mousedown="startResize(note, $event)"></div>
                         <div class="volume-handle" @mousedown="startVolumeChange(note, $event)"></div>
-                        {{ note.name + `(${note.volume})` }} <!-- + ` ${noteWidthToMML(note.width + 1)}` -->
+                        {{ note.name + `(${note.volume})` }}
                     </div>
+                    <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
+                </div> -->
+                <div class="grid" ref="grid">
+                    <canvas class="gridCanvas" ref="gridCanvas" :width="gridSpan*zoomScalar" :height="2592" @mousedown.left="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll" />
                     <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
                 </div>
             </div>
@@ -132,7 +136,7 @@
 </template>
 
 <script>
-import { ref, onMounted, watchEffect, computed, onBeforeUnmount } from 'vue';
+import { ref, onMounted, watchEffect, computed, onBeforeUnmount, watch, nextTick, mergeProps } from 'vue';
 import { Synthetizer, MIDIBuilder, writeMIDIFile, Sequencer, consoleColors, SpessaSynthLogging } from "spessasynth_lib";
 import HelpMenu from '@/components/HelpMenu.vue'
 import Tracks from '@/components/Tracks.vue'
@@ -157,6 +161,7 @@ export default {
         const tempo = ref(120);
         const loopSong = ref(false);
         const autoScrollSong = ref(false);
+        const gridCanvas = ref(null);
 
         const instruments = ref([
             { name: 'Lute', program: 0, min: 16, max: 88 },
@@ -225,7 +230,7 @@ export default {
 
         const rectangleStyle = computed(() => ({
             left: `${Math.min(startX.value, currentX.value)}px`,
-            top: `${Math.min(startY.value, currentY.value)}px`,
+            top: `${Math.min(startY.value, currentY.value) + 30}px`,
             width: `${Math.abs(currentX.value - startX.value)}px`,
             height: `${Math.abs(currentY.value - startY.value)}px`,
             backgroundColor: 'rgba(0, 100, 255, 0.3)', // Transparent blue
@@ -263,6 +268,129 @@ export default {
             )`
         }));
 
+        let ctx = null;
+
+        function drawCanvasGrid() {
+            if (!ctx) return;
+
+            //const startTime = performance.now();
+
+            const gridWrapper = document.querySelector('.grid-wrapper');
+            const screenLeft = gridWrapper.scrollLeft;
+            const screenRight = screenLeft + window.innerWidth;
+
+            const width = gridSpan.value * zoomScalar.value;
+            const height = 12 * 9 * gridHeight; // numKeys * keyHeight
+
+            ctx.clearRect(0, 0, width, height);
+
+            // ---- Horizontal Lines: every 24px, 2px thick, color #bbb ----
+            ctx.strokeStyle = '#bbb';
+            ctx.lineWidth = 2;
+            const horizontalSpacing = 24;
+            for (let y = 0; y <= height; y += horizontalSpacing) {
+                ctx.beginPath();
+                ctx.moveTo(screenLeft, y);
+                ctx.lineTo(screenRight, y);
+                ctx.stroke();
+            }
+
+            // ---- Vertical Subdivisions: every 16px, 2px thick, color #c0c0c0 ----
+            ctx.strokeStyle = '#c0c0c0';
+            ctx.lineWidth = 2;
+            const verticalSpacing = gridWidth.value * zoomScalar.value;
+            for (let x = 0; x <= width; x += verticalSpacing) {
+                if (x < screenLeft || x > screenRight) continue;
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+            }
+            
+            // ---- Bar Lines: every 256 * zoomScalar, 2px thick, color #777 ----
+            ctx.strokeStyle = '#777';
+            ctx.lineWidth = 2;
+            const barSpacing = 256 * zoomScalar.value;
+            for (let x = 0; x <= width; x += barSpacing) {
+                if (x < screenLeft || x > screenRight) continue;
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+            }
+
+            // ---- Optional: Notes ----
+            if (notesInGrid.value) {
+
+                const visibleNotes = notesInGrid.value.filter(note => {
+                    const noteRight = (note.left + note.width) * zoomScalar.value;
+                    return (
+                        noteRight >= screenLeft &&
+                        note.left * zoomScalar.value <= screenRight
+                    );
+                });
+
+                console.log(visibleNotes.length);
+
+                for (const note of visibleNotes) {
+                    if (note.muted) continue;
+
+                    const x = note.left * zoomScalar.value;
+                    const y = note.top;
+                    const width = (note.width + 1) * zoomScalar.value - 1;
+                    const height = gridHeight;
+
+                    // Draw filled note background
+                    ctx.fillStyle = hexToRgba(note.color, (note.volume + 1) / 15);
+                    ctx.fillRect(x, y, width, height);
+
+                    // Draw note border
+                    ctx.strokeStyle = note.highlighted ? 'white' : note.color;
+                    ctx.lineWidth = note.highlighted ? 2 : 1;
+                    ctx.strokeRect(x, y, width, height);
+
+                    // Draw volume handle
+                    const semiCircleRadius = Math.min(6, width / 4);
+                    const centerX = x + width/2;
+                    const centerY = y + height + semiCircleRadius * 0.35 - 1;
+
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, semiCircleRadius, Math.PI, 0, false);
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                    ctx.fill();
+
+                    // Draw resize handle
+                    const barWidth = Math.min(10, width * 0.4);
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                    ctx.fillRect(x + width - barWidth, y, barWidth, height);
+
+                    // Draw note label text
+                    const label = `${note.name} (${note.volume})`;
+                    ctx.font = '11px sans-serif';
+                    ctx.fillStyle = '#444';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+
+                    const textX = x + width / 2;
+                    const textY = y + height / 2;
+
+                    // ctx.save();
+                    // ctx.beginPath();
+                    // ctx.rect(x, y, width, height);
+                    // ctx.clip();
+
+                    ctx.fillText(label, textX, textY);
+
+                    // ctx.restore();
+                }
+            }
+
+            //const endTime = performance.now();
+            //console.log(`Drawing took ${endTime - startTime} ms`);
+
+        }
+
+
         // Left-hand Piano notes, not grid notes
         const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
         const blackNotes = ['C#', 'D#', 'F#', 'G#', 'A#'];
@@ -287,6 +415,19 @@ export default {
             const maxRightPosition = Math.max(...notesInGrid.value.map(note => note.left + note.width), 0);
             gridSpan.value = Math.max((maxRightPosition + window.innerWidth/zoomScalar.value), window.innerWidth/zoomScalar.value);
         });
+
+        watch(notesInGrid, () => {
+            drawCanvasGrid();
+        }, { deep: true });
+
+        watch(gridSpan, async () => {
+            await nextTick();
+            drawCanvasGrid();
+        }, { deep: true });
+
+        watch(gridWidth, () => {
+            drawCanvasGrid();
+        }, { deep: true });
 
         const addTrack = (instr, color, name) => {
             return EventBus.addTrack(null, instr, color, name);
@@ -358,7 +499,6 @@ export default {
 
         onMounted(async () => {
             try {
-
                 const gridWrapper = document.querySelector('.grid-wrapper');
                 if (gridWrapper) {
                     gridWrapper.addEventListener('scroll', updateRuler);
@@ -381,7 +521,14 @@ export default {
             } catch (error) {
                 console.error("Error initializing sequencer or synthesizer:", error);
             }
+            await nextTick();
+            if (gridCanvas.value) {
+                ctx = gridCanvas.value.getContext('2d');
+                drawCanvasGrid();
+            }
         });
+
+        
 
         onBeforeUnmount(() => {
             window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -733,6 +880,7 @@ export default {
                 scrollX.value = gridWrapper.scrollLeft;
                 ruler.style.left = -scrollX.value + 'px'; // Adjust ruler's left position
             }
+            drawCanvasGrid();
         }
 
         function stopPlaying() {
@@ -1187,6 +1335,7 @@ export default {
         };
 
         const handleGridScroll = (event) => {
+            // TODO: WE HAVE TO MAINTAIN A CONSTANT SIZED CANVAS. THE EXPANSION OF THE CANVAS CAUSES MUCHO LAG
             const deltaY = -Math.sign(event.deltaY)*1/8;
             if (event.ctrlKey) {
                 event.preventDefault();
@@ -1198,6 +1347,7 @@ export default {
                 const z2 = zoomScalar.value;
                 gridWrapper.scrollLeft += x*(z2/z1 - 1);
             }
+            console.log(gridCanvas.value.width);
         }
 
         function clearSelection() {
@@ -1210,7 +1360,7 @@ export default {
         const startSelection = (event) => {
             event.preventDefault();
             isSelecting.value = true;
-            const rect = grid.value.getBoundingClientRect();
+            const rect = gridCanvas.value.getBoundingClientRect();
             startX.value = event.clientX - rect.left;
             startY.value = event.clientY - rect.top;
             currentX.value = event.clientX - rect.left;
@@ -1221,9 +1371,10 @@ export default {
 
         const onSelectionMove = (event) => {
             if (isSelecting.value) {
-                const rect = grid.value.getBoundingClientRect();
+                const rect = gridCanvas.value.getBoundingClientRect();
                 currentX.value = event.clientX - rect.left;
                 currentY.value = event.clientY - rect.top;
+                // console.log(currentX.value, currentY.value);
                 // This is where we add the logic to highlight the notes that might be selected (or we can select them I dont really care)
             }
         };
@@ -1282,7 +1433,7 @@ export default {
                 return;
             }
 
-            const rect = grid.value.getBoundingClientRect();
+            const rect = gridCanvas.value.getBoundingClientRect();
             const x = (event.clientX - rect.left + grid.value.scrollLeft*zoomScalar.value);
             const y = event.clientY - rect.top + grid.value.scrollTop;
 
@@ -1298,7 +1449,7 @@ export default {
             endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number));
 
             const existingNote = notesInGrid.value.find(note =>
-                note.left === left && note.top === top && !note.muted
+                note.left <= left && left <= note.left + note.width && note.top === top && !note.muted
             );
 
             if (!existingNote) {
@@ -1322,6 +1473,7 @@ export default {
                 notesInGrid.value.push(newNote);
                 selectedTrack.value.notes.unshift(newNote);
                 startDrag(notesInGrid.value.find(note => note.id == id), event, false);
+                //console.log('NOTE X,Y', newNote.left, newNote.top);
             } else {
                 startDrag(existingNote, event);
             }
@@ -1975,7 +2127,8 @@ export default {
             updateColor,
             zoomScalar,
             autoScrollSong,
-            parseMMLFromClipboard
+            parseMMLFromClipboard,
+            gridCanvas
         };
     }
 };
@@ -2184,36 +2337,38 @@ export default {
 }
 
 .grid {
-    padding-top: 17px;
+    position: absolute;
+    overflow: hidden;
+    /* padding-top: 17px;
     margin-top: 30px;
     left: -1px;
     position: absolute;
     display: flex;
     min-width: 100%;
     align-self: top;
-    height: 100%;/*2592px;*/
-    background: repeating-linear-gradient( /*This is the horizontal lines*/
+    height: 100%;/*2592px;
+    background: repeating-linear-gradient( /*This is the horizontal lines
         0deg,
         #bbb,
         #bbb 2px,
         transparent 2px,
         transparent 24px
     ),
-    repeating-linear-gradient( /*This is the Bar line*/
+    repeating-linear-gradient( /*This is the Bar line
         90deg,
         #777,
         #777 2px,
         transparent 2px,
         transparent 256px
     ),
-    repeating-linear-gradient( /*This is the vertical lines*/
+    repeating-linear-gradient( /*This is the vertical lines
         90deg,
         #c0c0c0,
         #c0c0c0 2px,
         transparent 2px,
         transparent 16px
     ),
-    repeating-linear-gradient(/*This is the background colors*/
+    repeating-linear-gradient(/*This is the background colors
         90deg,
         #e0e0e0,
         #e0e0e0 64px,
@@ -2221,7 +2376,7 @@ export default {
         #ccc 128px
     );
     z-index: 10;
-    overflow: hidden;
+    overflow: hidden; */
 }
 
 .note {
@@ -2333,6 +2488,12 @@ export default {
     border: 1px solid rgba(0, 100, 255, 0.5);
     background-color: rgba(0, 100, 255, 0.3);
     z-index: 30;
+}
+
+.gridCanvas {
+    margin-top: 30px;
+    display: block;
+    z-index: 10;
 }
 
 </style>
