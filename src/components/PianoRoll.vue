@@ -1,13 +1,48 @@
 <template>
     <div class="piano-container">
         <button class="play-button" @click="playSequence">Play Sequence</button>
-        <div class="instrument-selector">
-            <label for="instrument-select">Select Instrument: </label>
-            <select id="instrument-select" v-model="selectedInstrument" @change="changeInstrument">
-                <option v-for="(instrument, index) in instruments" :key="index" :value="instrument">
-                    {{ instrument.name }}
-                </option>
-            </select>
+        <label class="loop-wrapper">
+            Loop:
+            <input type="checkbox" v-model="loopSong"/>
+        </label>
+        <label class="scroll-wrapper">
+            Auto-scroll:
+            <input type="checkbox" v-model="autoScrollSong"/>
+        </label>
+        <HelpMenu />
+        <div v-if="showSuccessNotification" class="copyNotification">
+            {{ successNotificationText }}
+        </div>
+        <div v-if="showFailedNotification" class="copyNotification" style="background-color: #d44;">
+            {{ failedNotificationText }}
+        </div>
+        
+        <Tracks @track-selected="handleTrackSelected" @add-track="handleAddTrack" @remove-track="handleRemoveTrack" @mute-track="handleMuteTrack" @color-change="updateColor" />
+        <div class="controls">
+            <div class="instrument-selector">
+                <label for="instrument-select">Select Instrument: </label>
+                <select id="instrument-select" v-model="selectedInstrument" @change="changeInstrument">
+                    <option v-for="(instrument, index) in instruments" :key="index" :value="instrument">
+                        {{ instrument.name }}
+                    </option>
+                </select>
+            </div>
+            <div class="tempo-selector">
+                <label for="tempo-select">Tempo: </label>
+                <input type="number" id="tempo-select" v-model.number="tempo" min="40" max="240">
+            </div>
+            <button class="track-splitter" @click="trackify">Split Track</button>
+            <button class="MML-converter" @click="genMML" style="margin-left: 10px;">Gen MML</button>
+            <button @click="parseMMLFromClipboard" style="margin-left : 10px;">Import MML From Clipboard</button>
+            <div class="grid-division-selector">
+                <label for="grid-select" style="padding-left: 10px">Grid Spacing: </label>
+                <select id="grid-select" v-model="gridWidth">
+                    <option v-for="(value) in [{displayName: '16ths', width: 256/16}, {displayName: '12ths', width: 256/12}]" :key="value.displayName" :value="value.width">
+                        {{ value.displayName }}
+                    </option>
+                </select>
+            </div>
+            <label style="padding: 10px;"> {{ 'Current Note Volume: ' + currentNoteVolume }} </label>
         </div>
         <div class="piano-roll" ref="pianoRoll">
             <div class="piano-keys">
@@ -21,27 +56,75 @@
                             @mouseover="mouseOverNote(0, note, octave)"
                             @mouseup="endNote(0, note, octave)"
                             @mouseleave="mouseLeaveNote(0, note, octave)"
-                            :style="note.isBlack ? { zIndex: 1 } : {}">
+                            :style="{
+                                zIndex: note.isBlack ? 1 : 0,
+                                background: note.index + 12*octave < instrKeyMin || note.index + 12*octave > instrKeyMax ? '#d44' : (note.isBlack ? '#000' : '#fff')
+                                }">
                             {{ note.name + octave }}
                         </div>
                     </div>
                 </div>
             </div>
+            <div class="ruler" ref="ruler" 
+                @mousedown="handleRulerClick"
+                :style="{
+                    width: 'calc( 10% + ' + gridSpan*zoomScalar + 'px )',
+                    background: `repeating-linear-gradient(
+                        90deg,
+                        #bbb,
+                        #bbb 2px,
+                        #eee 2px,
+                        #eee ${256*zoomScalar}px
+                    )`
+                }">
+                <div
+                    v-for="index in Math.ceil((gridSpan / 256))"
+                    :key="index"
+                    class="ruler-tick-label"
+                    :style="{ left: `calc(${(index - 1) * 256*zoomScalar}px)` }"
+                    >
+                    {{ index }}
+                </div>
+                <div class="marker-replay-triangle" :style="{ left: markerReplayPosition*zoomScalar + 'px' }"></div>
+                <div class="marker-wrapper" :style="{ left: markerPosition*zoomScalar + 'px' }">
+                    <div class="marker-triangle"></div>
+                    <div class="marker-line"></div>
+                </div>
+
+                <TempoMarker 
+                    v-for="(tempoMarker, index) in tempoMarkers"
+                    :key="tempoMarker.left"
+                    :left="(tempoMarker.left)*zoomScalar+1"
+                    :tempo="tempoMarker.tempo"
+                    :index="index"
+                    :color="tempoMarker.color"
+                    :visible="tempoMarker.muted ? 'hidden' : 'visible'"
+                    @click="clickTempoMarker"
+                />
+
+            </div>
             <div class="grid-wrapper">
-                <div class="grid" ref="grid" :style="{ width: gridSpan + 'px' }" @mousedown.left="startPlacingNote" @contextmenu.prevent="startNoteRemove">
+                <div class="grid" ref="grid" :style="{ width: gridSpan*zoomScalar + 'px', background: backgroundStyle.background }" @mousedown.left="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll">
                     <div v-for="note in notesInGrid" :key="note.id" class="note"
                         :style="{
-                        left: note.left + 'px',
-                        top: note.top + 'px',
-                        width: note.width + 'px',
-                        height: gridHeight + 'px'
+                            left: note.left*zoomScalar + 'px',
+                            top: (note.top + 1) + 'px',
+                            width: (note.width + 1) * zoomScalar - 1 + 'px',
+                            height: gridHeight + 'px',
+                            visibility: note.muted ? 'hidden' : 'visible',
+                            pointerEvents: note.muted ? 'none' : 'auto',
+                            backgroundColor: hexToRgba(note.color, (note.volume+1)/15),//note.highlighted ? 'rgba(255, 0, 0, 0.5)' : 'rgba(0, 120, 255, 0.5)'
+                            border: `${note.highlighted ? 2 : 1}px solid ${note.highlighted ? 'white' : note.color}`,
                         }"
                         @mousedown.left="startDrag(note, $event)"
                         @mouseup.left="endDrag"
-                        @mousedown.right.prevent="removeNote(note)">
+                        @mousedown.right.prevent="removeNote(note, false, $event)"
+                        @mouseover="removeNote(note, false, $event)">
                         <div class="resize-handle" @mousedown="startResize(note, $event)"></div>
-                        {{ note.name }}
+                        <div class="volume-handle" @mousedown="startVolumeChange(note, $event)"></div>
+                        {{ note.name + `(${note.volume})` }} <!-- + ` ${noteWidthToMML(note.width + 1)}` -->
                     </div>
+                    <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
                 </div>
             </div>
         </div>
@@ -49,74 +132,74 @@
 </template>
 
 <script>
-import { ref, onMounted, watchEffect } from 'vue';
-import { Synthetizer, MIDIBuilder, writeMIDIFile, Sequencer } from "spessasynth_lib";
+import { ref, onMounted, watchEffect, computed, onBeforeUnmount } from 'vue';
+import { Synthetizer, MIDIBuilder, writeMIDIFile, Sequencer, consoleColors, SpessaSynthLogging } from "spessasynth_lib";
+import HelpMenu from '@/components/HelpMenu.vue'
+import Tracks from '@/components/Tracks.vue'
+import { selectedTrack, tracks, selectedTrackIndex, trackHexColor, EventBus } from '@/components/Tracks.vue'
+import { _ } from 'core-js';
+import TempoMarker from './TempoMarker.vue';
 
 export default {
     name: 'PianoRoll',
+    components: {
+        HelpMenu, Tracks, TempoMarker
+    },
     setup() {
+        const root = process.env.NODE_ENV === 'production' ? '../MabiMML/' : '../';
         const pianoRoll = ref(null);
         const grid = ref(null);
         const synth = ref(null);
         const context = ref(null);
         const isMouseDown = ref(false);
-        const selectedInstrument = ref({ name: 'Piano', sf2: '../soundfonts/piano.sf2' });
+        const selectedInstrument = ref({ name: 'Lute', program: 0, min: 16, max: 88 });
         const midiBuilder = ref(null);
+        const tempo = ref(120);
+        const loopSong = ref(false);
+        const autoScrollSong = ref(false);
 
         const instruments = ref([
-            { name: 'Piano', sf2: '../soundfonts/piano.sf2' },
-            { name: 'Harp', sf2: '../soundfonts/harp.sf2' },
-            { name: 'Lyre', sf2: '../soundfonts/lyre.sf2' },
-            { name: 'Lute', sf2: '../soundfonts/lute.sf2' },
-            { name: 'Ukulele', sf2: '../soundfonts/ukulele.sf2' },
-            { name: 'Mandolin', sf2: '../soundfonts/mandolin.sf2' },
-            { name: 'Electric Guitar', sf2: '../soundfonts/electric_guitar.sf2' },
-            { name: 'Violin', sf2: '../soundfonts/violin.sf2' },
-            { name: 'Cello', sf2: '../soundfonts/cello.sf2' },
-            { name: 'Flute', sf2: '../soundfonts/flute.sf2' },
-            { name: 'Whistle', sf2: '../soundfonts/whistle.sf2' },
-            { name: 'Chalumeau', sf2: '../soundfonts/chalumeau.sf2' },
-            { name: 'Roncadora', sf2: '../soundfonts/roncadora.sf2' },
-            { name: 'Physis Tuba', sf2: '../soundfonts/tuba.sf2' },
-            { name: 'Festival Lute', sf2: '../soundfonts/festival_lute.sf2' },
-            { name: 'Festival Ukulele', sf2: '../soundfonts/festival_ukulele.sf2' },
-            { name: 'Festival Mandolin', sf2: '../soundfonts/festival_mandolin.sf2' },
-            { name: 'Fest/Tuned Flute', sf2: '../soundfonts/festival_flute.sf2' },
-            { name: 'Fest/Tuned Whistle', sf2: '../soundfonts/festival_whistle.sf2' },
-            { name: 'Tuned Violin', sf2: '../soundfonts/tuned_violin.sf2' },
-            { name: 'Tuned Cello', sf2: '../soundfonts/tuned_cello.sf2' },
-            { name: 'Drum Kit', sf2: '../soundfonts/drum_kit.sf2' },
-            { name: 'Bass Drum', sf2: '../soundfonts/bass_drum.sf2' },
-            { name: 'Snare Drum', sf2: '../soundfonts/snare_drum.sf2' },
-            { name: 'Cymbals', sf2: '../soundfonts/cymbals.sf2' },
-            { name: 'Hand Chimes', sf2: '../soundfonts/hand_chimes.sf2' },
-            { name: 'Male Voice', sf2: '../soundfonts/male_voice.sf2' },
-            { name: 'Male Chorus', sf2: '../soundfonts/male_chorus.sf2' },
-            { name: 'Female Voice', sf2: '../soundfonts/female_voice.sf2' },
-            { name: 'Female Chorus', sf2: '../soundfonts/female_chorus.sf2' },
-            { name: "'C' Tone Bottle", sf2: '../soundfonts/c_tone_bottle.sf2' },
-            { name: "'D' Tone Bottle", sf2: '../soundfonts/d_tone_bottle.sf2' },
-            { name: "'E' Tone Bottle", sf2: '../soundfonts/e_tone_bottle.sf2' },
-            { name: "'F' Tone Bottle", sf2: '../soundfonts/f_tone_bottle.sf2' },
-            { name: "'G' Tone Bottle", sf2: '../soundfonts/g_tone_bottle.sf2' },
-            { name: "'A' Tone Bottle", sf2: '../soundfonts/a_tone_bottle.sf2' },
-            { name: "'B' Tone Bottle", sf2: '../soundfonts/b_tone_bottle.sf2' },
-            { name: "'C' Tone Handbell", sf2: '../soundfonts/c_tone_handbell.sf2' },
-            { name: "'D' Tone Handbell", sf2: '../soundfonts/d_tone_handbell.sf2' },
-            { name: "'E' Tone Handbell", sf2: '../soundfonts/e_tone_handbell.sf2' },
-            { name: "'F' Tone Handbell", sf2: '../soundfonts/f_tone_handbell.sf2' },
-            { name: "'G' Tone Handbell", sf2: '../soundfonts/g_tone_handbell.sf2' },
-            { name: "'A' Tone Handbell", sf2: '../soundfonts/a_tone_handbell.sf2' },
-            { name: "'B' Tone Handbell", sf2: '../soundfonts/b_tone_handbell.sf2' },
-            { name: 'High \'C\' Tone Handbell', sf2: '../soundfonts/high_c_tone_handbell.sf2' }
+            { name: 'Lute', program: 0, min: 16, max: 88 },
+            { name: 'Ukulele', program: 1, min: 16, max: 88 },
+            { name: 'Mandolin', program: 2, min: 16, max: 88 },
+            { name: 'Whistle', program: 3, min: 12, max: 88 },
+            { name: 'Roncadora', program: 4, min: 12, max: 88 },
+            { name: 'Flute', program: 5, min: 15, max: 88 },
+            { name: 'Chalumeau', program: 6, min: 16, max: 88 },
+            { name: 'Tuba', program: 18, min: 12, max: 95 },
+            { name: 'Lyre', program: 19, min: 9, max: 80 },
+            { name: 'Electric Guitar', program: 20, min: 4, max: 99 },
+            { name: 'Piano', program: 21, min: 0, max: 84 },
+            { name: 'Violin', program: 22, min: 16, max: 59 },
+            { name: 'Cello', program: 23, min: 0, max: 46 },
+            { name: 'Harp', program: 24, min: 9, max: 83 },
+            { name: 'Tuned Violin', program: 25, min: 16, max: 59 },
+            { name: 'Tuned Cello', program: 26, min: 0, max: 46 },
+            { name: 'Drum Kit', program: 27, min: 29, max: 53 },
+            { name: 'Festival Lute', program: 50, min: 16, max: 88 },
+            { name: 'Festival Ukulele', program: 51, min: 16, max: 88 },
+            { name: 'Festival Mandolin', program: 52, min: 16, max: 88 },
+            { name: 'Fest/Tuned Whistle', program: 53, min: 12, max: 83 },
+            { name: 'Fest/Tuned Flute', program: 54, min: 15, max: 83 },
+            { name: 'Bass Drum', program: 66, min: 12, max: 84 },
+            { name: 'Snare Drum', program: 67, min: 12, max: 84 },
+            { name: 'Cymbals', program: 68, min: 12, max: 84 },
+            { name: 'Hand Chimes', program: 77, min: 9, max: 80 },
+            { name: 'Female Chorus', program: 110, min: 19, max: 48 },
+            { name: 'Male Chorus', program: 100, min: 14, max: 46 },
+            { name: 'Male Voice', program: 120, min: 17, max: 49 },
+            { name: 'Female Voice', program: 121, min: 12, max: 45 },
         ]);
 
-        var currentNoteLength = ref(16);
-        const gridWidth = 16;
+
+        let currentNoteLength = ref(16);
+        let currentNoteVolume = ref(8);
+        const gridWidth = ref(256/16); // This makes the base size an x-th note
         const gridHeight = 24;
         const notesInGrid = ref([]);
-        const draggingNote = ref(null);
-        const resizingNote = ref(null);
+        const draggingNotes = ref([]);
+        const resizingNotes = ref([]);
+        const volumeChangingNotes = ref([]);
         const startX = ref(0);
         const startY = ref(0);
         const startLeft = ref(0);
@@ -124,6 +207,63 @@ export default {
         const startWidth = ref(0);
         const gridSpan = ref(window.innerWidth);
 
+        const scrollX = ref(0);
+
+        const selectedNotes = ref([]);
+        const isSelecting = ref(false);
+        const currentX = ref(0);
+        const currentY = ref(0);
+
+        const ruler = ref(null);
+        const markerPosition = ref(0);
+        const markerReplayPosition = ref(0);
+        const tempoMarkers = ref([]);
+        const seq = ref(null);
+        const isPlaying = ref(false);
+
+        const zoomScalar = ref(1);
+
+        const rectangleStyle = computed(() => ({
+            left: `${Math.min(startX.value, currentX.value)}px`,
+            top: `${Math.min(startY.value, currentY.value)}px`,
+            width: `${Math.abs(currentX.value - startX.value)}px`,
+            height: `${Math.abs(currentY.value - startY.value)}px`,
+            backgroundColor: 'rgba(0, 100, 255, 0.3)', // Transparent blue
+            border: '1px solid rgba(0, 100, 255, 0.5)' // Optional border
+        }));
+
+        const backgroundStyle = computed(() => ({
+            background: `repeating-linear-gradient( /*This is the horizontal lines*/
+                0deg,
+                #bbb,
+                #bbb 2px,
+                transparent 2px,
+                transparent 24px
+            ),
+            repeating-linear-gradient( /*This is the Bar line*/
+                90deg,
+                #777,
+                #777 2px,
+                transparent 2px,
+                transparent ${256 * zoomScalar.value}px
+            ),
+            repeating-linear-gradient( /*This is the vertical lines*/
+                90deg,
+                #c0c0c0,
+                #c0c0c0 2px,
+                transparent 2px,
+                transparent ${gridWidth.value * zoomScalar.value}px
+            ),
+            repeating-linear-gradient(/*This is the background colors*/
+                90deg,
+                #e0e0e0,
+                #e0e0e0 ${64*zoomScalar.value}px,
+                #ccc ${64*zoomScalar.value}px,
+                #ccc ${128*zoomScalar.value}px
+            )`
+        }));
+
+        // Left-hand Piano notes, not grid notes
         const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
         const blackNotes = ['C#', 'D#', 'F#', 'G#', 'A#'];
         const notes = ref(noteNames.map((name, index) => ({
@@ -133,14 +273,74 @@ export default {
         })));
         const octaves = ref([0, 1, 2, 3, 4, 5, 6, 7, 8]);
 
+        const showSuccessNotification = ref(false);
+        const successNotificationText = ref('');
+        const showFailedNotification = ref(false);
+        const failedNotificationText = ref('');
+
+        const instrKeyMin = ref(16);
+        const instrKeyMax = ref(88);
+
+        let noteClipboard = [];
+
         watchEffect(() => {
             const maxRightPosition = Math.max(...notesInGrid.value.map(note => note.left + note.width), 0);
-            gridSpan.value = Math.max(maxRightPosition + window.innerWidth, window.innerWidth);
+            gridSpan.value = Math.max((maxRightPosition + window.innerWidth/zoomScalar.value), window.innerWidth/zoomScalar.value);
         });
 
-        const loadSoundFont = async (instrument) => {
+        const addTrack = (instr, color, name) => {
+            return EventBus.addTrack(null, instr, color, name);
+        };
+
+        const handleTrackSelected = (track) => {
+            //console.log(newInstrument);
+            //console.log(track);
+            selectedInstrument.value = track.instrument;
+            selectedTrackIndex.value = tracks.value.indexOf(track);
+            changeInstrument();
+        };
+
+        const handleAddTrack = async (newTrack, index) => {
+            // if (synth.value)
+            //     await synth.value.soundfontManager.addNewSoundFont(newTrack.instrument, `main${index}`, index);
+        };
+
+        const handleRemoveTrack = async (oldTrack, newTrack) => {
+            for (const note of oldTrack.notes) {
+                removeNote(note, true);
+            }
+
+            tempoMarkers.value = tempoMarkers.value.filter(marker => marker.parentTrack.id !== oldTrack.id);
+
+            // if (selectedTrackIndex.value === newTrack.index)
+            //     selectedInstrument.value = newTrack.instrument;
+            // if (synth.value)
+            //     await synth.value.soundfontManager.deleteSoundFont(`main${index}`);
+        };
+
+        const handleMuteTrack = async (trackIndex) => {
+            if (isPlaying.value)
+                playSequence();
+            const track = tracks.value[trackIndex];
+            for (const tempoMarker of tempoMarkers.value) {
+                if (tempoMarker.parentTrack === track) {
+                    tempoMarker.muted = track.isMuted;
+                }
+            }
+
+        };
+
+        const updateColor = (track, newColor) => {
+            for (const marker of tempoMarkers.value) {
+                if (marker.parentTrack === track) {
+                    marker.color = newColor;
+                }
+            }
+        };
+
+        const loadSoundFont = async () => {
             try {
-                const response = await fetch(instrument.sf2);
+                const response = await fetch(root + 'soundfonts/mabi_instruments_high_quality.sf3');
                 const soundFontArrayBuffer = await response.arrayBuffer();
                 return soundFontArrayBuffer;
             } catch (error) {
@@ -149,13 +349,33 @@ export default {
             }
         };
 
+        const handleBeforeUnload = (event) => {
+            const message = 'Leave Site? Changes you made may not be saved.';
+            event.preventDefault();
+            event.returnValue = message;
+            return 'message';
+        }
+
         onMounted(async () => {
             try {
+
+                const gridWrapper = document.querySelector('.grid-wrapper');
+                if (gridWrapper) {
+                    gridWrapper.addEventListener('scroll', updateRuler);
+                    updateRuler();
+                }
+
+                document.addEventListener('keydown', handleKeyPress);
+                window.addEventListener('beforeunload', handleBeforeUnload);
+                // Setting up audio context
                 context.value = new AudioContext();
-                await context.value.audioWorklet.addModule("../worklet_processor.min.js");
-                const soundFontArrayBuffer = await loadSoundFont(selectedInstrument.value);
+
+                await context.value.audioWorklet.addModule(root + "worklet_processor.min.js");
+                const soundFontArrayBuffer = await loadSoundFont();
                 if (!soundFontArrayBuffer) return;
                 synth.value = new Synthetizer(context.value.destination, soundFontArrayBuffer, true, undefined, {chorusEnabled: false, reverbEnabled: false});
+                synth.value.setMainVolume(2);
+                synth.value.setLogLevel(false, false, false, false);
                 await synth.value.isReady;
 
             } catch (error) {
@@ -163,31 +383,449 @@ export default {
             }
         });
 
-        const playSequence = async () => {
-            try {
-                midiBuilder.value = new MIDIBuilder("untitled", 480, 120);
-                //midiBuilder.value.addEvent(0, 0, 0xC0, [selectedInstrument.value.program - 1]);
+        onBeforeUnmount(() => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        });
+
+        const handleRulerClick = (event) => {
+            if (event.button === 0) {
+                if (!event.shiftKey) {
+                    startMarkerDrag(event);
+                } else {
+                    placeTempoMarker(event);
+                }
+            }
+        };
+
+        const placeTempoMarker = (event) => {
+            const granularity = event.altKey ? gridWidth.value/4 : gridWidth.value;
+            const left = Math.round((event.clientX - ruler.value.getBoundingClientRect().left) / granularity / zoomScalar.value) * granularity;
+            const enteredTempo = prompt("Enter tempo (BPM):", "120");
+            //console.log(enteredTempo);
+            if (enteredTempo !== null && !isNaN(enteredTempo) && enteredTempo !== '') {
+                tempoMarkers.value.push({
+                    left: left,
+                    tempo: Number(enteredTempo),
+                    color: selectedTrack.value.color,
+                    parentTrack: selectedTrack.value,
+                    muted: false
+                });
+            }
+        };
+
+        const clickTempoMarker = (event, index) => {
+            event.preventDefault();
+            //console.log(event);
+            if (event.button !== 0)
+                return;
+            const enteredTempo = prompt("Enter tempo (BPM):", "120");
+            if (enteredTempo === null)
+                return;
+            if (!isNaN(enteredTempo) && enteredTempo !== '') {
+                tempoMarkers.value[index].tempo = Number(enteredTempo);
+            } else {
+                tempoMarkers.value.splice(index, 1);
+            }
+        };
+
+        const startMarkerDrag = (event) => {
+            if (isPlaying) {
+                stopPlaying();
+            }
+            updateMarkerPos(event.clientX, event.altKey, true);
+            document.addEventListener('mousemove', onMarkerDrag);
+            document.addEventListener('mouseup', onMarkerDragEnd);
+        };
+
+        const onMarkerDrag = (event) => {
+            updateMarkerPos(event.clientX, event.altKey, true);
+        };
+
+        const onMarkerDragEnd = async () => {
+            document.removeEventListener('mousemove', onMarkerDrag);
+            document.removeEventListener('mouseup', onMarkerDragEnd);
+        };
+
+        let markerInterval;
+        let markerStartPos;
+        let startTempo;
+        let tempoIdx = 0;
+
+        async function startMarkerAnim() {
+            isPlaying.value = true;
+            markerStartPos = markerPosition.value;
+            startTempo = tempo.value;
+            tempoMarkers.value.sort((a, b) => {a.left - b.left});
+            doMarkerAnim();
+        }
+
+        function doMarkerAnim() {
+            let timeChange = 0;
+            tempoIdx = 0;
+            startTempo = tempo.value;
+            let marker = tempoMarkers.value[tempoIdx];
+            while (marker && marker.left < markerPosition.value) { // Skip ahead to proper first marker
+                if (markerPosition.value > 0) {
+                    startTempo = marker.tempo;
+                }
+                tempoIdx++;
+                marker = tempoMarkers.value[tempoIdx];
+            }
+            const gridWrapper = document.querySelector('.grid-wrapper');
+            function tick() {
+                if (markerPosition.value < 0) {
+                    startTempo = tempo.value;
+                    tempoIdx = 0;
+                    timeChange = 0;
+                    markerStartPos = 0;
+                    markerPosition.value = 0;
+                }
+                marker = tempoMarkers.value[tempoIdx];
+                while (marker && marker.muted) { // Skip ahead to the next unmuted marker
+                    tempoIdx++;
+                    marker = tempoMarkers.value[tempoIdx];
+                }
+                //console.log(marker);
+                if (marker && marker !== null) {
+                    if (markerPosition.value >= marker.left) {
+                        tempoIdx++;
+                        markerStartPos = markerPosition.value;
+                        timeChange = seq.value.currentTime;
+                        startTempo = marker.tempo;
+                    }
+                }
+
+                markerPosition.value = ((seq.value.currentTime - timeChange) * 4 * 16 * startTempo / 60) + markerStartPos;
+                if (autoScrollSong.value) {
+                    gridWrapper.scrollLeft = markerPosition.value * zoomScalar.value - screen.width * 0.66;
+                }
+                if (seq.value && !loopSong.value)
+                    seq.value.loop = loopSong.value;
+            }
+            clearInterval(markerInterval);
+            tick();
+            markerInterval = setInterval(tick, 5);
+        }
+
+        function noteWidthToMML(width) {
+            let outString = '';
+            //256 pixels is 1 bar (4 beats); 64 pixels is 1 beat in 4/4
+            let mmlWidth = width;
+            let noteLengths = [];
+            for (let i = 1; i <= 64; ++i) {
+              if (i < 12 || i % 12 === 0 || i % 16 === 0) {
+
+                  let val1 = Math.round(256 / i * 100);
+                  let val2 = Math.round(256 / i * 150);
                 
-                context.value.resume();
+                  noteLengths.push({
+                      length: val2,
+                      name: 'L' + i + '.'
+                  });
+                  noteLengths.push({
+                      length: val1,
+                      name: 'L' + i
+                  });
+              }
+            }
+            let result = getClosestWidth(noteLengths, mmlWidth);
+            outString = result.noteCombination.map(note => note.name).join('&');
+            return outString;
+        }
+
+        function getClosestWidth(notes, targetWidth) {
+            let amount = Math.round(targetWidth * 100);
+
+            const dp = new Array(amount + 1).fill(Infinity);
+            dp[0] = 0;
+
+            const usedNotes = new Array(amount + 1).fill(-1);   
+
+            for (let i = 1; i <= amount; i++) {
+                for (const note of notes) {
+                    const noteValue = note.length;
+                    if (i >= noteValue && dp[i - noteValue] + 1 < dp[i]) {
+                        dp[i] = dp[i - noteValue] + 1;
+                        usedNotes[i] = note;
+                    }
+                }
+            }
+
+            if (dp[amount] === Infinity) {
+                return { minNotes: null, noteCombination: []};
+            }
+
+            const result = []
+            let currentAmount = amount;
+            while (currentAmount > 0) {
+                const note = usedNotes[currentAmount];
+                result.push(note);
+                currentAmount -= note.length;
+            }
+
+            return { minNotes: dp[amount], noteCombination: result };
+
+        }
+
+        const stopMarkerAnim = () => {
+            clearInterval(markerInterval);
+            isPlaying.value = false;
+        }
+
+        const updateMarkerPos = (clientX, altKey, fromClick) => {
+            if (ruler.value) {
+                const rulerRect = ruler.value.getBoundingClientRect();
+                let newPos = Math.round((clientX - rulerRect.left)/zoomScalar.value / (gridWidth.value/4)) * (gridWidth.value/4);
+                let gridSnap = gridWidth.value * (zoomScalar.value <= 0.5 ? 64/gridWidth.value : 1);
+
+                if (!altKey) {
+                    newPos = Math.round(newPos / (gridSnap)) * gridSnap;
+                }
+
+                newPos = Math.max(0, Math.min(gridSpan.value, newPos));
+
+                markerPosition.value = newPos;
+                if (fromClick) {
+                    markerReplayPosition.value = newPos;
+                }
+
+            }
+        }
+
+        function handleKeyPress(event) {
+            if (selectedTrack.value.isEditingName)
+                return;
+            if (event.key === 'Backspace' || event.key === 'Delete') {
+                for (const note of selectedNotes.value) {
+                    removeNote(note, true);
+                }
+                
+                if (isPlaying.value)
+                    playSequence();
+            }
+            if (event.code === 'Space') {
+                event.preventDefault();
+                if (isPlaying.value) {
+                    stopPlaying();
+                    if (!event.ctrlKey) {
+                        markerPosition.value = markerReplayPosition.value;
+                    }
+                } else {
+                    playSequence();
+                }
+            } else if (event.key === 'a' && event.ctrlKey && !selectedTrack.value.isEditingName) {
+                event.preventDefault();
+                for (const note of notesInGrid.value) {
+                    selectNote(note);
+                }
+                
+                showSuccessMessage(`Selected ${selectedNotes.value.length} notes!`, 1000);
+            } else if (event.key === 'ArrowUp') {
+                if (event.ctrlKey || event.shiftKey) {
+                    event.preventDefault();
+                    let movementValue = event.ctrlKey ? 12 : 1;
+                    for (const note of selectedNotes.value) {
+                        if (note.top - gridHeight * movementValue < -0) return;
+                    }
+                    for (const note of selectedNotes.value) {
+                        note.top -= gridHeight * movementValue
+                        const number = (1284-(note.top/2))/144;
+                        const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
+                        note.name = noteName;
+                        note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
+                    }
+                }
+            } else if (event.key === 'ArrowDown') {
+                if (event.ctrlKey || event.shiftKey) {
+                    event.preventDefault();
+                    let movementValue = event.ctrlKey ? 12 : 1;
+                    for (const note of selectedNotes.value) {
+                        if (note.top + gridHeight * movementValue >= octaves.value.length * gridHeight * 12) return;
+                    }
+                    for (const note of selectedNotes.value) {
+                        note.top += gridHeight * movementValue
+                        const number = (1284-(note.top/2))/144;
+                        const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
+                        note.name = noteName;
+                        note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
+                    }
+                }
+            } else if (event.key === 'ArrowLeft') {
+                if (event.ctrlKey || event.shiftKey) {
+                    event.preventDefault();
+                    let movementValue = event.ctrlKey ? 1 : 4;
+                    for (const note of selectedNotes.value) {
+                        if (Math.round((note.left - gridWidth.value / movementValue)*1000)/1000 < 0) return;
+                    }
+                    for (const note of selectedNotes.value) {
+                        note.left = Math.round((note.left - gridWidth.value / movementValue)*1000)/1000;
+                    }
+                }
+            } else if (event.key === 'ArrowRight') {
+                if (event.ctrlKey || event.shiftKey) {
+                    event.preventDefault();
+                    let movementValue = event.ctrlKey ? 1 : 4;
+                    for (const note of selectedNotes.value) {
+                        note.left = Math.round((note.left + gridWidth.value / movementValue)*1000)/1000;
+                    }
+                }
+            } else if (event.key === 'c' && event.ctrlKey) {
+                event.preventDefault();
+                // Copy selected notes to some "clipboard".
+                noteClipboard = [];
+                for (const note of selectedNotes.value) {
+                    noteClipboard.push(note);
+                }
+
+                showSuccessMessage(`Copied ${noteClipboard.length} note${noteClipboard.length > 1 ? 's' : ''} to the clipboard!`, 1000);
+            } else if (event.key === 'x' && event.ctrlKey) {
+                event.preventDefault();
+                // Copy and delete selected notes to some "clipboard".
+                noteClipboard = [];
+                for (const note of selectedNotes.value) {
+                    noteClipboard.push(note);
+                    removeNote(note, true);
+                }
+                showSuccessMessage(`Cut ${noteClipboard.length} note${noteClipboard.length > 1 ? 's' : ''} and put them in the clipboard!`, 1000);
+            } else if (event.key === 'v' && event.ctrlKey) {
+                event.preventDefault();
+                // Paste selected notes from "clipboard" into the selected track.
+                clearSelection();
+                for (const note of noteClipboard) {
+                    const newNote = {
+                        id: notesInGrid.value.length + Date.now(),
+                        name: note.name,
+                        left: Math.round(Math.round((note.left + scrollX.value/zoomScalar.value)*gridWidth.value/4)*4/gridWidth.value),
+                        top: note.top,
+                        pitch: note.pitch,
+                        width: note.width,
+                        length: note.length,
+                        highlighted: true,
+                        color: selectedTrack.value.color,
+                        start: note.start,
+                        end: note.end,
+                        volume: note.volume,
+                        muted: false,
+                        track: selectedTrack.value
+                    };
+                    selectedNotes.value.push(newNote);
+                    notesInGrid.value.push(newNote);
+                    newNote.track.notes.unshift(newNote);
+                }
+                showSuccessMessage(`Pasted ${noteClipboard.length} notes from the clipboard!`, 1000);
+            } else if (event.key === 't' && selectedNotes.value.length > 0) {
+                for (const track of tracks.value) {
+                    track.notes = track.notes.filter((note) => { return !selectedNotes.value.includes(note); });
+                }
+                for (const note of selectedNotes.value) {
+                    note.track = selectedTrack.value;
+                    note.color = selectedTrack.value.color;
+                    selectedTrack.value.notes.unshift(note);
+                }
+                showSuccessMessage(`Moved ${selectedNotes.value.length} notes into track "${selectedTrack.value.name}"!`, 1000);
+            }
+        }
+
+        function updateRuler() {
+            const gridWrapper = document.querySelector('.grid-wrapper');
+            const ruler = document.querySelector('.ruler');
+            if (gridWrapper && ruler) {
+                scrollX.value = gridWrapper.scrollLeft;
+                ruler.style.left = -scrollX.value + 'px'; // Adjust ruler's left position
+            }
+        }
+
+        function stopPlaying() {
+            if (seq.value)
+                seq.value.stop();
+            stopMarkerAnim();
+            synth.value.programChange(0, selectedInstrument.value.program);
+        }
+
+        const playSequence = async (fromClick = null) => {
+            try {
+                if (fromClick && isPlaying.value) {
+                    stopPlaying();
+                    markerPosition.value = markerReplayPosition.value;
+                    return;
+                }
+                midiBuilder.value = new MIDIBuilder("untitled", 480, tempo.value);
+                //midiBuilder.value.addEvent(0, 0, 0xC0, [selectedInstrument.value.program]);
+                
+                await context.value.resume();
                 if (!synth.value) return;
 
-                notesInGrid.value.forEach(note => {
-                    const channel = 0;
-                    const pitch = noteNames.indexOf(note.name.slice(0, -1)) + 12 * (parseInt(note.name.slice(-1)) + 1);
-                    const startTime = note.left / gridWidth*120;
-                    const duration = note.width * (480/(gridWidth*4));
+                let notesAdded = 0;
 
-                    midiBuilder.value.addNoteOn(startTime, 0, channel, pitch, 127);
-                    midiBuilder.value.addNoteOff(startTime + duration, 0, channel, pitch);
+                let audibleTracks = [];
+
+                for (const track of tracks.value) {
+                    if (!track.isMuted) {
+                        audibleTracks.push(track);
+                        midiBuilder.value.addNewTrack(track.name + tracks.value.indexOf(track));
+                    }
+                }
+
+                notesInGrid.value.forEach(note => {
+                    if (!note.muted && note.left + note.width >= markerPosition.value) {
+
+                        // Code to get the note's parent track
+                        let containingTrack = note.track;
+                        // for (const track of tracks.value) {
+                        //     if (track.notes.some(n => n.id === note.id)) {
+                        //         containingTrack = track;
+                        //     }
+                        // }
+                        const trackIndex = audibleTracks.indexOf(containingTrack);
+                        const channel = trackIndex;//trackIndex;
+                        const pitch = note.pitch;
+                        // Conversion from pixels to time.
+                        const noteStartTime = note.left/16*120;
+                        const noteDuration = (note.width+1)/16*120;
+                        const markerTime = markerPosition.value/16*120;
+                        const startTime = Math.max(noteStartTime, markerTime)-markerTime;
+                        const duration = Math.min(noteDuration, noteStartTime+noteDuration-markerTime);
+                        const volume = Math.max(0, Math.min(127, (note.volume + 1) * 8 - 1));
+
+                        
+
+                        midiBuilder.value.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
+                        midiBuilder.value.addNoteOn(startTime, trackIndex, channel, pitch, volume);
+                        midiBuilder.value.addNoteOff(startTime + duration - 1, trackIndex, channel, pitch);
+                        notesAdded++;
+                    }
                 });
+
+                for (const tempoMarker of tempoMarkers.value) {
+                    if (tempoMarker.parentTrack.isMuted)
+                        continue;
+                    const tempoStartTime = tempoMarker.left/16*120;
+                    const markerTime = markerPosition.value/16*120;
+                    const tempoChangeTime = Math.max(tempoStartTime, markerTime)-markerTime;
+                    midiBuilder.value.addSetTempo(tempoChangeTime, tempoMarker.tempo);
+                }
+
+                if (notesAdded === 0) {
+                    return;
+                }
 
                 midiBuilder.value.flush();
 
                 const b = await(writeMIDIFile(midiBuilder.value));
-                const seq = new Sequencer([{binary: b}], synth.value);
-                seq.loop = false;
+                seq.value = new Sequencer([{binary: b}], synth.value);
+                seq.value.skipToFirstNoteOn = false;
+                seq.value.loop = loopSong.value && markerPosition.value === 0;
                 await synth.value.isReady;
-                seq.play();
+                seq.value.addOnSongEndedEvent(() => {
+                    stopMarkerAnim();
+                    markerPosition.value = markerReplayPosition.value;
+                    if (loopSong.value && !seq.value.loop) {
+                        markerPosition.value = 0;
+                        playSequence();
+                    }
+                }, 'test2');
+                await seq.value.play();
+                startMarkerAnim();
             } catch (error) {
                 console.error("Error playing sequence: ", error);
             }
@@ -197,7 +835,7 @@ export default {
             try {
                 context.value.resume();
                 await synth.value.isReady;
-                synth.value.noteOn(channel, note.index + 12 * (octave + 1), 127, false);
+                synth.value.noteOn(channel, note.index + 12 * (octave + 1), Math.max(0, Math.min(127, (currentNoteVolume.value + 1) * 8 - 1)), false);
             } catch (error) {
                 console.error(error);
             }
@@ -214,156 +852,1062 @@ export default {
             }
         };
 
+        const showSuccessMessage = (text, timeout=2000) => {
+            successNotificationText.value = text;
+            showSuccessNotification.value = true; // Show notification
+
+            // Hide notification after 2 seconds
+            setTimeout(() => {
+                showSuccessNotification.value = false;
+            }, timeout);
+        };
+
+        const showFailureMessage = (text, timeout=2000) => {
+            failedNotificationText.value = text;
+            showFailedNotification.value = true; // Show notification
+
+            // Hide notification after 2 seconds
+            setTimeout(() => {
+                showFailedNotification.value = false;
+            }, timeout);
+        };
+
         const mouseOverNote = (channel, note, octave) => {
-            if (isMouseDown.value && !draggingNote.value && !resizingNote.value) {
+            if (isMouseDown.value && draggingNotes.value.length === 0 && resizingNotes.value.length === 0) {
                 startNote(channel, note, octave);
             }
         };
 
         const mouseLeaveNote = (channel, note, octave) => {
-            if (isMouseDown.value && !draggingNote.value && !resizingNote.value) {
+            if (isMouseDown.value && draggingNotes.value.length === 0 && resizingNotes.value.length === 0) {
                 endNote(channel, note, octave);
             }
         };
 
         const changeInstrument = async () => {
-            if (synth.value) {
-
-            }
             if (synth.value && selectedInstrument.value) {
-                const soundFontArrayBuffer = await loadSoundFont(selectedInstrument.value);
-
-                if (!soundFontArrayBuffer) return;
-
-                //context.value = new AudioContext();
-                //await context.value.audioWorklet.addModule("../worklet_processor.min.js");
-
-                //synth.value = new Synthetizer(context.value.destination, soundFontArrayBuffer, true, undefined, {chorusEnabled: false, reverbEnabled: false});
+                selectedTrack.value.instrument = selectedInstrument.value;
                 
-                await synth.value.soundfontManager.reloadManager(soundFontArrayBuffer);
+                instrKeyMin.value = selectedInstrument.value.min;
+                instrKeyMax.value = selectedInstrument.value.max;
+
+                synth.value.programChange(0, selectedInstrument.value.program);
+                if (isPlaying.value)
+                    playSequence();
+
                 await synth.value.isReady;
             }
         };
 
-        const startDrag = (note, event) => {
+        const startPositions = new Map();
+
+        const startDrag = (note, event, placeNote = true) => {
+            // console.log(note.id);
             event.preventDefault();
-            if (event.button === 0 && !resizingNote.value) { // Ensure we're dragging with left button
-                draggingNote.value = note;
-                startX.value = event.clientX;
-                startY.value = event.clientY;
-                startLeft.value = note.left;
-                startTop.value = note.top;
-                currentNoteLength.value = draggingNote.value.width / gridWidth;
+            if (event.button === 0 && resizingNotes.value.length === 0 && volumeChangingNotes.value.length === 0) { // Ensure we're dragging with left button
+                if (note.highlighted) {
+                    draggingNotes.value = selectedNotes.value;
+                } else {
+                    clearSelection();
+                    draggingNotes.value.push(note);
+                }
+
+                if (event.shiftKey && placeNote) {
+                    for (const note of draggingNotes.value) {
+                        const newNote = {
+                            id: notesInGrid.value.length + Date.now(),
+                            name: note.name,
+                            left: note.left,
+                            top: note.top,
+                            pitch: note.pitch,
+                            width: note.width,
+                            length: note.length,
+                            highlighted: false,
+                            color: note.color,
+                            start: note.start,
+                            end: note.end,
+                            volume: note.volume,
+                            muted: false,
+                            track: note.track
+                        };
+                        notesInGrid.value.push(newNote);
+                        newNote.track.notes.unshift(newNote);
+                    }
+                }
+
+                for (const draggingNote of draggingNotes.value) {
+                    startPositions.set(draggingNote.id, {
+                        x: event.clientX,
+                        y: event.clientY,
+                        left: draggingNote.left,
+                        top: draggingNote.top
+                    });
+                }
+
+                currentNoteLength.value = note.length;
+                currentNoteVolume.value = note.volume;
+                selectedTrackIndex.value = tracks.value.indexOf(note.track);
+                trackHexColor.value = note.track.color;
                 document.addEventListener('mousemove', onDrag);
                 document.addEventListener('mouseup', endDrag);
             }
         };
 
         const onDrag = (event) => {
-            if (draggingNote.value && !resizingNote.value) {
-                const dx = event.clientX - startX.value;
-                const dy = event.clientY - startY.value;
-                var newLeft = Math.round((startLeft.value + dx) / gridWidth) * gridWidth;
-                var newTop = Math.round((startTop.value + dy) / gridHeight) * gridHeight;
+            if (draggingNotes.value && resizingNotes.value.length === 0 && volumeChangingNotes.value.length === 0) {
 
-                if (newLeft < 0) {
-                    newLeft = 0;
+                let outOfBounds = false;
+                const newPositions = [];
+
+                let offGridNote = false;
+
+                for (const note of draggingNotes.value) {
+                    if (event.altKey || (note.highlighted && note.left % gridWidth.value !== 0)) {
+                        offGridNote = true;
+                        break;
+                    }
                 }
 
-                if (newTop < 0) {
-                    newTop = 0;
-                } else if (newTop > 2568) {
-                    newTop = 2568;
+                const noteSnapScale = offGridNote ? gridWidth.value / 4 : gridWidth.value;
+
+                let noteDelta = 0;
+
+                for (let i = 0; i < draggingNotes.value.length; ++i) {
+                    const note = draggingNotes.value[i];
+
+                    const startPos = startPositions.get(note.id);
+                    if (!startPos) continue;
+
+                    const dx = (event.clientX - startPos.x)/zoomScalar.value;
+                    const dy = event.clientY - startPos.y;
+
+                    let newLeft = 0;
+                    
+                    if (i === 0) {
+                        newLeft = Math.round((startPos.left + dx) / noteSnapScale) * noteSnapScale;
+                        noteDelta = newLeft - startPos.left;
+                    } else {
+                        newLeft = startPos.left + noteDelta;
+                    }
+
+                    let newTop = Math.round((startPos.top + dy) / gridHeight) * gridHeight;
+                    
+                    if (newLeft < 0 || newTop < 0 || newTop > 2568) {
+                        outOfBounds = true;
+                        break; // Exit loop if any note is out of bounds
+                    }
+
+                    newPositions.push({ note, newLeft, newTop });
+
                 }
 
-                draggingNote.value.left = newLeft;
-                draggingNote.value.top = newTop;
+                if (outOfBounds) return;
 
-                const number = (1284-(draggingNote.value.top/2))/144;
-                const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
-                if (draggingNote.value.name != noteName) {
-                    startNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
-                    endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
+                // Auto-scroll stuff doesnt work super well yet, so I'll leave it out for now
+                let rightMost = Infinity;
+                let leftMost = Infinity;
+                let topMost = Infinity;
+                let bottomMost = 0;
+
+                for (const { note, newLeft, newTop } of newPositions) {
+
+                    note.left = newLeft;
+                    note.top = newTop;
+
+                    const number = (1284-(note.top/2))/144;
+                    const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
+                    if (note.name != noteName && draggingNotes.value.length === 1) {
+                        startNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
+                        endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
+                    }
+                    note.name = noteName;
+                    note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
+
+                    // if (note.left + note.width < rightMost)
+                    //     rightMost = note.left + note.width;
+
+                    // if (note.left < leftMost)
+                    //     leftMost = note.left;
+
+                    // if (note.top < topMost)
+                    //     topMost = note.top;
+
+                    // if (note.top > bottomMost)
+                    //     bottomMost = note.top;
+                    
                 }
-                draggingNote.value.name = noteName;
+                // const gridWrapper = document.querySelector('.grid-wrapper');
+                // const pianoRoll = document.querySelector('.piano-roll');
+                // if (rightMost > gridWrapper.scrollLeft + window.innerWidth) {
+                //     gridWrapper.scrollLeft = rightMost - window.innerWidth;
+                // } else if (leftMost < gridWrapper.scrollLeft) {
+                //     gridWrapper.scrollLeft = leftMost;
+                // } else if (bottomMost - topMost < window.innerHeight && topMost < pianoRoll.scrollTop) {
+                //     pianoRoll.scrollTop = topMost;
+                // } else if (bottomMost - topMost < window.innerHeight && bottomMost > window.innerHeight*0.85 + pianoRoll.scrollTop) {
+                //     pianoRoll.scrollTop = bottomMost - window.innerHeight*0.85;
+                // }
+
             }
         };
 
         const endDrag = () => {
-            draggingNote.value = null;
+            if (isPlaying.value)
+                playSequence();
+            draggingNotes.value = [];
             document.removeEventListener('mousemove', onDrag);
             document.removeEventListener('mouseup', endDrag);
+            startPositions.clear();
         };
+
+        const startResizeData = new Map();
 
         const startResize = (note, event) => {
             event.preventDefault();
-            resizingNote.value = note;
-            startX.value = event.clientX;
-            startWidth.value = note.width;
-            document.addEventListener('mousemove', onResize);
-            document.addEventListener('mouseup', endResize);
+            if (event.button === 0) { // Ensure we're resizing with the left button
+                resizingNotes.value = [];
+                startX.value = event.clientX;
+                startResizeData.clear(); // Clear previous data
+
+                if (note.highlighted) {
+                    // If note is highlighted, prepare to resize all selected notes
+                    selectedNotes.value.forEach(n => {
+                        startResizeData.set(n.id, { width: n.width, startX: event.clientX });
+                    });
+                    resizingNotes.value = selectedNotes.value;
+                } else {
+                    // If note is not highlighted, resize only this note
+                    clearSelection();
+                    startResizeData.set(note.id, { width: note.width, startX: event.clientX });
+                    resizingNotes.value = [note];
+                }
+                
+                document.addEventListener('mousemove', onResize);
+                document.addEventListener('mouseup', endResize);
+            }
         };
 
         const onResize = (event) => {
-            if (resizingNote.value) {
-                const dx = event.clientX - startX.value;
-                let newWidth = Math.max(gridWidth, Math.round((startWidth.value + dx)/gridWidth)*gridWidth);
-                resizingNote.value.width = newWidth;
-                currentNoteLength.value = newWidth / gridWidth;
+            if (resizingNotes.value.length > 0) {
+                let allInBounds = true;
+
+                const newWidths = [];
+
+                resizingNotes.value.forEach(note => {
+                    const startData = startResizeData.get(note.id);
+                    if (!startData) return;
+
+                    const dx = (event.clientX - startData.startX)/zoomScalar.value;
+                    let newWidth = 0;
+                    if (event.altKey) {
+                        newWidth = Math.round((startData.width + dx) / (gridWidth.value/4)) * gridWidth.value / 4 - 1;
+                    } else {
+                        newWidth = Math.round((startData.width + dx) / gridWidth.value) * gridWidth.value - 1;
+                    }
+
+                    // Check if newWidth is valid for the note
+                    if (newWidth < gridWidth.value - 1 && !event.altKey || newWidth < 3) {
+                        allInBounds = false;
+                        return;
+                    }
+
+                    newWidths.push({ note, newWidth })
+
+                });
+
+                // If any note was resized to an invalid width, stop resizing
+                if (allInBounds) {
+                    for (const { note, newWidth } of newWidths) {
+                        note.width = newWidth;
+                        note.length = (newWidth + 1) / gridWidth.value;
+                        currentNoteLength.value = note.length;
+                    };
+                }
+            }
+        };
+
+        const endResize = () => {
+            resizingNotes.value = [];
+            startResizeData.clear();
+            document.removeEventListener('mousemove', onResize);
+            document.removeEventListener('mouseup', endResize);
+        };
+
+        let startingNoteVolume = 0;
+
+        const startVolumeChange = (note, event) => {
+            event.preventDefault();
+            if (event.button === 0) { // Ensure we're clicking with the left button
+                volumeChangingNotes.value = [];
+                startY.value = event.clientY;
+
+                if (note.highlighted) {
+                    // If note is highlighted, prepare to re-volume all selected notes
+                    volumeChangingNotes.value = selectedNotes.value;
+                } else {
+                    // If note is not highlighted, re-volume only this note
+                    clearSelection();
+                    volumeChangingNotes.value = [note];
+                }
+                startingNoteVolume = note.volume;
+
+                document.addEventListener('mousemove', onVolumeChange);
+                document.addEventListener('mouseup', endVolumeChange);
+            }
+        };
+
+        const onVolumeChange = (event) => {
+            event.preventDefault();
+            if (volumeChangingNotes.value.length > 0) {
+                for (const note of volumeChangingNotes.value) {
+                    const dy = startY.value - event.clientY;
+                    let newVolume = Math.round(Math.max(1, Math.min(15, startingNoteVolume + dy/10)));
+                    note.volume = newVolume;
+                    currentNoteVolume.value = newVolume;
+                }
+            }
+        };
+        
+        const endVolumeChange = () => {
+            volumeChangingNotes.value = [];
+            if (isPlaying.value)
+                playSequence();
+            document.removeEventListener('mousemove', onVolumeChange);
+            document.removeEventListener('mouseup', endVolumeChange);
+        };
+
+        const handleGridClick = (event) => {
+            if (event.ctrlKey && draggingNotes.value.length <= 0) {
+                if (!event.shiftKey)
+                    clearSelection();
+                startSelection(event);
+            } else {
+                startPlacingNote(event);
+            }
+        };
+
+        const handleGridScroll = (event) => {
+            const deltaY = -Math.sign(event.deltaY)*1/8;
+            if (event.ctrlKey) {
+                event.preventDefault();
+                const gridWrapper = document.querySelector('.grid-wrapper');
+                const z1 = zoomScalar.value;
+                const l = gridWrapper.scrollLeft;
+                const x = (event.clientX - gridWrapper.getBoundingClientRect().left + l);
+                zoomScalar.value = Math.min(8, Math.max(1/8, Math.round((zoomScalar.value+deltaY)*8)/8)); // Making sure that the zoom is in multiples of 1/8th
+                const z2 = zoomScalar.value;
+                gridWrapper.scrollLeft += x*(z2/z1 - 1);
             }
         }
 
-        const endResize = () => {
-            resizingNote.value = null;
-            document.removeEventListener('mousemove', onResize);
-            document.removeEventListener('mouseup', endResize);
+        function clearSelection() {
+            selectedNotes.value.forEach((note) => {
+                note.highlighted = false;
+            });
+            selectedNotes.value = [];
         }
 
+        const startSelection = (event) => {
+            event.preventDefault();
+            isSelecting.value = true;
+            const rect = grid.value.getBoundingClientRect();
+            startX.value = event.clientX - rect.left;
+            startY.value = event.clientY - rect.top;
+            currentX.value = event.clientX - rect.left;
+            currentY.value = event.clientY - rect.top;
+            document.addEventListener('mousemove', onSelectionMove);
+            document.addEventListener('mouseup', onSelectionEnd);
+        };
+
+        const onSelectionMove = (event) => {
+            if (isSelecting.value) {
+                const rect = grid.value.getBoundingClientRect();
+                currentX.value = event.clientX - rect.left;
+                currentY.value = event.clientY - rect.top;
+                // This is where we add the logic to highlight the notes that might be selected (or we can select them I dont really care)
+            }
+        };
+
+        const onSelectionEnd = () => {
+            if (isSelecting.value) {
+                isSelecting.value = false;
+                document.removeEventListener('mousemove', onSelectionMove);
+                document.removeEventListener('mouseup', onSelectionEnd);
+                // This is where we add the logic to actually select the notes
+                checkIntersections();
+            }
+        };
+
+        function checkIntersections() {
+            const selectionRect = {
+                left: Math.min(startX.value, currentX.value)/zoomScalar.value,
+                top: Math.min(startY.value, currentY.value),
+                right: Math.max(startX.value, currentX.value)/zoomScalar.value,
+                bottom: Math.max(startY.value, currentY.value),
+            };
+
+            notesInGrid.value.forEach(note => {
+                const itemRect = {
+                    left: note.left,
+                    top: note.top,
+                    right: note.left + note.width,
+                    bottom: note.top + gridHeight,
+                };   
+
+                if (intersects(selectionRect, itemRect)) {
+                    //console.log(note.name + ' intersects with selection.');
+                    selectNote(note);
+                }
+            });
+
+        };
+
+        function selectNote(note) {
+            if (!selectedNotes.value.includes(note) && !note.muted) {
+                selectedNotes.value.push(note);
+                note.highlighted = true;
+            }
+        }
+
+        function intersects(rect1, rect2) {
+            return !(rect2.left >= rect1.right ||
+                    rect2.right <= rect1.left ||
+                    rect2.top >= rect1.bottom ||
+                    rect2.bottom <= rect1.top);
+        }
+
+
         const startPlacingNote = (event) => {
-            if (draggingNote.value || resizingNote.value) {
+            if (draggingNotes.value.length > 0 || resizingNotes.value.length > 0 || volumeChangingNotes.value.length > 0) {
                 return;
             }
 
-            const gridElement = grid.value;
-            const rect = gridElement.getBoundingClientRect();
-            const x = event.clientX - rect.left + gridElement.scrollLeft;
-            const y = event.clientY - rect.top + gridElement.scrollTop;
+            const rect = grid.value.getBoundingClientRect();
+            const x = (event.clientX - rect.left + grid.value.scrollLeft*zoomScalar.value);
+            const y = event.clientY - rect.top + grid.value.scrollTop;
 
-            const left = Math.round((x - gridWidth / 2) / gridWidth) * gridWidth;
+            let left = Math.round((x - gridWidth.value / 2) / gridWidth.value / zoomScalar.value) * gridWidth.value;
+            if (event.altKey)
+                left = Math.round((x - gridWidth.value / 2) / (gridWidth.value/4) / zoomScalar.value) * gridWidth.value/4;
+
             const top = Math.round((y - gridHeight / 2) / gridHeight) * gridHeight;
 
             const number = (1284-(top/2))/144;
             const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
-            startNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
-            endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
+            startNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number));
+            endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number));
 
             const existingNote = notesInGrid.value.find(note =>
-                note.left === left && note.top === top
+                note.left === left && note.top === top && !note.muted
             );
 
             if (!existingNote) {
-                 // You can adjust this logic if needed
-                notesInGrid.value.push({
-                    id: Date.now(),
-                    name: noteName,
+                clearSelection();
+                const id = notesInGrid.value.length + Date.now();
+                const newNote = {
                     left: left,
                     top: top,
-                    width: gridWidth * currentNoteLength.value,
-                });
+                    width: gridWidth.value * currentNoteLength.value - 1,
+                    highlighted: false,
+                    color: selectedTrack.value ? selectedTrack.value.color : 'hsla(212, 100%, 50%, 0.5)',
+                    id: id,
+                    name: noteName,
+                    pitch: number * 12 % 12 + 12 * (Math.floor(number) + 1),
+                    length: currentNoteLength.value,
+                    start: left / gridWidth.value,
+                    end: left / gridWidth.value + currentNoteLength.value,
+                    volume: currentNoteVolume.value,
+                    track: selectedTrack.value
+                };
+                notesInGrid.value.push(newNote);
+                selectedTrack.value.notes.unshift(newNote);
+                startDrag(notesInGrid.value.find(note => note.id == id), event, false);
             } else {
-                // Start dragging if a note already exists at the clicked position
                 startDrag(existingNote, event);
             }
         };
 
-        const startNoteRemove = (note, event) => {
-            if (event.button === 2) { // Ensure we're removing with right button
-                removeNote(note);
+        //let trackWrappers = [];
+
+        const trackify = () => {
+            let notesList = [...selectedTrack.value.notes].sort((a, b) => {
+                if (a.left === b.left) {
+                    return a.top - b.top;
+                }
+                return a.left - b.left;
+            });
+            //let trackWrappers = [];
+            // for (let i = 0; i < tracks.value.length; ++i) {   
+            //     trackWrappers.push({
+            //         notes: [],
+            //         track: tracks.value[i]
+            //     });
+            // }
+
+            // Idea: Take the selected track and split it into more tracks.
+            // This involves adding new tracks (only if allowed, otherwise cancel the operation)
+            // if (tracks.value.length < 16)
+            //     addTrack();
+            // Then, put the proper notes into the proper tracks.
+
+            // For all notes in the selected track
+            // starting with selected track:
+            // if note can go into this track, then add it
+            // otherwise, add a new track, and put the note in there.
+
+            // after all notes are situated, loop through all tracks in the wrapper and set their notes equal to the new note lists
+
+            let trackWrappers = [];
+            trackWrappers.push({
+                notes: [],
+                track: selectedTrack.value,
+                index: 0
+            });
+
+            for (const note of notesList) {
+                //console.log(note.id);
+                for (const trackWrapper of trackWrappers) {
+                    if (!trackWrapper.notes[0] || trackWrapper.notes[0].left + trackWrapper.notes[0].width < note.left) {
+                        trackWrapper.notes.unshift(note);
+                        break;
+                    } else {
+                        if (trackWrapper.index === trackWrappers.length - 1) {
+                            trackWrappers.push({
+                                notes: [],
+                                track: {instrument: trackWrapper.track.instrument, color: null, name: selectedTrack.value.name + ` (${trackWrappers.length})`},
+                                index: trackWrappers.length
+                            });
+                        }
+                    }
+                }
             }
+
+            if (tracks.value.length + trackWrappers.length - 1 > 16) {
+                showFailureMessage('Failed to split track! (Process would create too many tracks!)');
+                return;
+            }
+
+            showSuccessMessage(`Successfully split the track "${selectedTrack.value.name}" into ${trackWrappers.length} tracks!`, 3000);
+
+            for (const trackWrapper of trackWrappers) {
+                if (!tracks.value.includes(trackWrapper.track)) {
+                    trackWrapper.track = addTrack(trackWrapper.track.instrument, trackWrapper.track.color, trackWrapper.track.name);
+                }
+                trackWrapper.track.notes = trackWrapper.notes;
+                for (const note of trackWrapper.track.notes) {
+                    note.track = trackWrapper.track;
+                    note.color = trackWrapper.track.color;
+                }
+            }
+
         };
 
-        const removeNote = (note) => {
+        function hexToRgba(originalColor, alpha) {
+            let hex = originalColor.replace('#', '');
+
+            if (hex.length === 3) {
+                hex = hex.split('').map(char => char + char).join('');
+            }
+
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                    successNotificationText.value = "MML copied to clipboard!";
+                    showSuccessNotification.value = true; // Show notification
+
+                    // Hide notification after 2 seconds
+                    setTimeout(() => {
+                        showSuccessNotification.value = false;
+                    }, 2000);
+                }).catch(err => {
+                    console.error('Could not copy text: ', err);
+                });
+        }
+
+        const genMML = () => {
+            for (const track of tracks.value) {
+                track.notes.sort((a, b) => {
+                    if (a.left === b.left) {
+                        return a.top - b.top;
+                    }
+                    return a.left - b.left;
+                });
+                track.notes.reverse();
+            }
+            let outString = 'T' + tempo.value;
+            // console.log(tracks.value.length, tracks.value);
+            let audibleTracks = [];
+
+            for (const track of tracks.value) {
+                if (!track.isMuted) {
+                    audibleTracks.push(track);
+                }
+            }
+
+            for (const track of audibleTracks) {
+                // If there exists two notes whose values overlap within the same track, then we cannot and will not generate an MML.
+                for (let i = 0; i < track.notes.length; ++i) {
+                    let rightNote = track.notes[i];
+                    let leftNote = i + 1 < track.notes.length ? track.notes[i + 1] : null;
+                    if (leftNote === null) break;
+                    // Scan from left to right. The next note should not have a left value <= note.end
+                    if (rightNote.left <= leftNote.left + leftNote.width) {
+                        console.log("Could Not Gen MML");
+                        showFailureMessage(`Failed to copy MML to clipboard! Track '${track.name}'' has overlapping notes!`);
+                        return null;
+                    }
+                }
+            }
+
+            if (0 <= audibleTracks.length && audibleTracks.length <= 4) {
+                audibleTracks.sort((a, b) => b.notes.length - a.notes.length); // sort the largest track to the top
+                //console.log(audibleTracks);
+                for (const track of audibleTracks) {
+                    let prevNoteEnd = 0;
+                    // Make a list of all tempo changes for this track
+                    let trackTempoMarkers = [];
+                    for (const tempoMarker of tempoMarkers.value) {
+                        if (tempoMarker.parentTrack === track) {
+                            trackTempoMarkers.push(tempoMarker);
+                        }
+                    }
+                    // We now need to "insert" the tempoMarkers at the appropriate "left" values.
+                    // This would mean whenever we have a note at left position l, we would place the tempo change before the note if it had the same l.
+                    // Similarly, if there were some gap between notes, we would put the tempo change wherever it belonged in that gap.
+                    // Since our list of tempomarkers is sorted, we can pop (Array.shift()) the tempomarkers from our list as we go.
+
+                    let notables = [...trackTempoMarkers, ...track.notes.slice().reverse()];
+                    notables.sort((a, b) => a.left - b.left);
+
+                    for (const note of notables) {
+                        if (note.left >= prevNoteEnd + 4) {
+                            // console.log('Adding Rest...', note.left, prevNoteEnd + 4);
+                            let gap = note.left - prevNoteEnd;
+                            let restStr = noteWidthToMML(gap);
+                            restStr = restStr.replaceAll('L', 'R');
+                            outString += restStr;
+                        }
+                        //console.log(note.width);
+                        if (!note.width) { // This means that it was a tempo marker and not a note.
+                            outString += 'T' + note.tempo;
+                            prevNoteEnd = note.left;
+                        } else {
+                            let noteStr = noteWidthToMML(note.width + 1);
+                            if (noteStr.includes('&')) {
+                                let k = noteStr.split('&');
+                                for (let i = 0; i < k.length; ++i) {
+                                    outString += k[i] + 'V' + note.volume + 'N' + (note.pitch - 12) + (i === k.length - 1 ? '' : '&');
+                                }
+                            } else {
+                                outString += noteWidthToMML(note.width + 1) + 'V' + note.volume + 'N' + (note.pitch-12);
+                            }
+                            prevNoteEnd = note.left + note.width + 1;
+                        }
+                    }
+                    outString += ',';
+                }
+            } else {
+                console.log("Could Not Gen MML");
+                showFailureMessage('Failed to copy MML to clipboard! Too many tracks visible!');
+                return null;
+            }
+            outString = outString.slice(0, -1);
+            // Now we condense the output;
+            let outTracks = outString.split(',');
+            let newTracks = [];
+            for (const track of outTracks) {
+                let tokens = tokenizeMML(track);
+                let simplifiedTokens = simplifyMML(tokens);
+                let simplifiedMML = stringifyMML(simplifiedTokens);
+                newTracks.push(simplifiedMML);
+            }
+
+            outString = `MML@${newTracks.join(',')};`;
+
+            // Log output to console and copy it to the clipboard
+            console.log(outString);
+            copyToClipboard(outString);
+        };
+
+        function getEnharmonicEquivalent(note) {
+            if (note.length === 1)
+                return note;
+            let root = note[0];
+            let accidental = note[1];
+            let noteIndex = noteNames.indexOf(root);
+            if (accidental === '#' || accidental === '+') {
+                noteIndex = (noteIndex + 1) % 12;
+            } else if (accidental === '-') {
+                noteIndex = ((noteIndex - 1) % 12 + 12) % 12;
+            }
+            return noteNames[noteIndex];
+        }
+
+        const patterns = {
+            LENGTH: /L(\d+)\.?/g,  // Matches note lengths, e.g., L4, L8.
+            NOTE: /[A-G][-+#]?\d*\.?|N\d+/g,         // Matches notes like N60, N62.
+            REST: /R\d*\.?/g,      // Matches rests like R4, R8.
+            TIE: /&/g,              // Matches ties.
+            VOLUME: /V(\d+)/g,
+            TEMPO: /T(\d+)/g,
+            OCTAVE: /O(\d+)|[<>]/g
+        };
+
+        function tokenizeMML(mmlString) {
+            let tokens = [];
+            
+            // Run regex patterns over the input
+            for (const [key, regex] of Object.entries(patterns)) {
+                let match;
+                while ((match = regex.exec(mmlString)) !== null) {
+                    tokens.push({ type: key, value: match[0], index: match.index });
+                }
+            }
+
+            // Sort tokens by their original index in the string
+            tokens.sort((a, b) => a.index - b.index);
+
+            return tokens;
+        }
+
+        function simplifyMML(tokenList) {
+            // This is NOT optimal, but it works.
+            let newTokenList = JSON.parse(JSON.stringify(tokenList));
+            let totalPasses = 10;
+            
+            for (let pass = 0; pass < totalPasses; ++pass) {
+                let octave = 4;
+                let length = '4';
+                let tempo = '120';
+                let volume = '8';
+            
+                for (let i = 0; i < newTokenList.length; ++i) {
+                    let token = newTokenList[i];
+                    if (token.type === 'LENGTH') {
+                        let tokenLength = token.value.split('L')[1];
+                        if (tokenLength !== length) {
+                            length = tokenLength;
+                        } else {
+                            newTokenList.splice(i, 1);
+                            i--;
+                        }
+                    } else if (token.type === 'VOLUME') {
+                        let tokenVolume = token.value.split('V')[1];
+                        if (tokenVolume !== volume) {
+                            volume = tokenVolume;
+                        } else {
+                            newTokenList.splice(i, 1);
+                            i--;
+                        }
+                    } else if (token.type === 'TEMPO') {
+                        let tokenTempo =  token.value.split('T')[1]; // BUG: THERE IS A BUG WHERE HAVING A T150 IN TRACK 1 AND A T120 IN TRACK 2 AFTER THE MARKER IN TRACK 1 WILL CAUSE TRACK 2 TO DELETE ITS T120 BECAUSE IT DOESNT SEE/RECOGNIZE THAT THE TEMPO WAS CHANGED IN TRACK 1 BEFORE THIS TRACK
+                        if (tokenTempo !== tempo) {
+                            tempo = tokenTempo;
+                        } else {
+                            newTokenList.splice(i, 1);
+                            i--;
+                        }
+                    } else if (token.type === 'REST') {
+                        let restLength = token.value.split('R')[1];
+                        if (restLength === length) {
+                            token.value = 'R';
+                        }
+                    } else if (token.type === 'NOTE') {
+                        if (!token.value.includes('N'))
+                            continue;
+                        let notePitch = Number(token.value.split('N')[1]);
+                        let noteOctave = Math.floor(notePitch/12);
+                        let noteKey = noteNames[notePitch - 12*noteOctave];
+                        if (noteOctave !== octave) {
+                            let diff = noteOctave - octave;  // Positive diff means noteOctave is higher.
+                            let octaveChanges = [];
+
+                            if (Math.abs(diff) < 3) {
+                                // Insert `>` or `<` for smaller octave differences.
+                                let symbol = diff > 0 ? '>' : '<';
+                                for (let j = 0; j < Math.abs(diff); ++j) {
+                                    octaveChanges.push({ type: 'OCTAVE', value: symbol, index: token.index+j });
+                                }
+                            } else {
+                                // Use absolute octave changes for larger octave differences.
+                                octaveChanges = [{ type: 'OCTAVE', value: 'O' + noteOctave, index: token.index }];
+                            }
+                            // console.log(octaveChanges);
+                            // Now splice in the octave changes and the note key.
+                            newTokenList.splice(i, 1, ...octaveChanges, { type: 'NOTE', value: noteKey, index: token.index + octaveChanges.length });
+
+                            octave = noteOctave; // Update current octave to the new one.
+                        } else {
+                            // No octave change, just update the note value.
+                            token.value = noteKey;
+                        }
+                    }
+                }
+                
+                // Now we simplify lengths
+                let lengthIndex = 0;
+                for (let i = 0; i < newTokenList.length; ++i) {
+                    let token = newTokenList[i];
+                    let prevToken = i > 0 ? newTokenList[i-1] : null;
+                    if (token.type === 'LENGTH') {
+                        // Count until we hit the next length token or the end of the list.
+                        let noteCount = 0;
+                        let noteIndexes = [];
+                        for (let j = i+1; j < newTokenList.length; ++j) {
+                            let token2 = newTokenList[j];
+                            // if note/rest has no postfix number, then we add it to the count
+                            if ((token2.type === 'NOTE' || token2.type === 'REST') && token2.value.replace(/[A-GRN][#]?/g, '') === '') {
+                                noteCount++;
+                                noteIndexes.push(j);
+                            } else if (token2.type === 'LENGTH') {
+                                break;
+                            }
+                        }
+                        
+                        if ((prevToken && prevToken.type === 'TIE') || noteCount * token.value.length <= token.value.length + noteCount) {
+                            // remove this length tag and put the length on the notes
+                            // console.log(noteCount);
+                            for (const noteIndex of noteIndexes) {
+                                newTokenList[noteIndex].value = newTokenList[noteIndex].value + token.value.split('L')[1];
+                            } 
+                            newTokenList.splice(i, 1);
+                        }
+                        
+                    } else if (token.type === 'TEMPO') {
+                        // Look for any duplicate tempos that have no notes or rests between them.
+                    } else if (token.type === 'VOLUME') {
+                        // Look for any duplicate volumes that have no notes or rests between them.
+                    }
+                }
+            }
+            
+            return newTokenList;
+        }
+
+        function stringifyMML(tokens) {
+            let outStr = '';
+            for (const token of tokens) {
+                outStr += token.value;
+            }
+            return outStr;
+        }
+
+        function mmlToNewTrack(title, mmlTokens) {
+            let newTokenList = [...mmlTokens];
+            // Creates a new track with title and with data from mmlTokens
+            let newTrack = addTrack(instruments.value[10], null, title);
+            let octave = 4;
+            let length = '4';
+            let tempo = '120';
+            let volume = '8';
+            let builderX = 0; // We will update the currentX based on note length/width/etc
+            let previousNote = null;
+            for (let i = 0; i < newTokenList.length; i++) {
+                let token = newTokenList[i];
+                //console.log(token);
+                if (token.type === 'LENGTH') {
+                    let tokenLength = token.value.split('L')[1];
+                    if (tokenLength !== length) {
+                        length = tokenLength;
+                    }
+                } else if (token.type === 'TIE') {
+                    if (previousNote === null)
+                        continue;
+                    // if the next note has the same pitch as the previous note, then we modify the duration of previous note and increment builderX and i
+                    let nextNote = newTokenList[i + 1];
+                    let noteLength = length;
+                    let noteName = 'C';
+                    let noteOctave = octave;
+                    let notePitch = 0;
+
+                    if (nextNote.value.startsWith('N')) {
+                        notePitch = Number(nextNote.value.split('N')[1]);
+                        noteOctave = Math.floor(notePitch/12);
+                        noteName = noteNames[(notePitch - 12*noteOctave) % 12];
+                        let dotted = noteLength.includes('.');
+                        noteLength = Number(noteLength.slice(0, noteLength.length-dotted)) * (dotted ? 2/3 : 1);
+                    } else {
+                        let sharp = nextNote.value.includes('#') || nextNote.value.includes('+')
+                        let flat = nextNote.value.includes('-');
+                        let dotted = nextNote.value.includes('.');
+                        noteName = getEnharmonicEquivalent(nextNote.value.slice(0, 1 + sharp + flat));
+                        let noteIndex = noteNames.indexOf(noteName);
+                        if (noteIndex === 11 && flat)
+                            noteOctave -= 1;
+                        if (noteIndex === 0 && sharp)
+                            noteOctave += 1;
+                        if (nextNote.value.length - dotted > 1 + sharp + flat) { // If the note has a length added on
+                            noteLength = Number(nextNote.value.slice(((sharp || flat) ? 2 : 1), nextNote.value.length - dotted)) * (dotted ? 2/3 : 1);
+                        } else {// If the note has no added length
+                            let Ldotted = length.includes('.');
+                            dotted = Ldotted || dotted;
+                            noteLength = Number(length.slice(0, length.length-Ldotted)) * (dotted ? 2/3 : 1);
+                        }
+                        notePitch = noteNames.indexOf(noteName) + 12 * noteOctave;
+                    }
+                    if (previousNote.pitch - 12 === notePitch) {
+                        builderX += 256/noteLength;
+                        previousNote.width += 256/noteLength;
+                        previousNote.length += noteLength;
+                        previousNote.end += noteLength;
+                        i++;
+                    }
+
+                } else if (token.type === 'OCTAVE') {
+                    let tokenOctave = token.value;
+                    if (tokenOctave === '<') {
+                        octave -= 1;
+                    } else if (tokenOctave === '>') {
+                        octave += 1;
+                    } else {
+                        octave = Number(tokenOctave.split('O')[1]);
+                    }
+                } else if (token.type === 'VOLUME') {
+                    let tokenVolume = token.value.split('V')[1];
+                    if (tokenVolume !== volume) {
+                        volume = tokenVolume;
+                    }
+                } else if (token.type === 'TEMPO') {
+                    let tokenTempo =  token.value.split('T')[1];
+                    if (tokenTempo !== tempo) {
+                        tempo = tokenTempo;
+                        tempoMarkers.value.push({
+                            left: builderX,
+                            tempo: Number(tempo),
+                            color: newTrack.color,
+                            parentTrack: newTrack,
+                            muted: false
+                        });
+                    }
+                } else if (token.type === 'REST') {
+                    let restLength = token.value.split('R')[1];
+                    if (restLength === length || Number(restLength) === 0 || isNaN(Number(restLength))) {
+                        let dotted = length.includes('.') || restLength.includes('.');
+                        let lengthNum = Number(length);
+                        builderX += (256 / lengthNum) * (dotted ? 1.5 : 1); // 1 bar is 256 pixels (no matter the tempo)
+                    } else {
+                        let dotted = restLength.includes('.');
+                        let lengthNum = Number(restLength);
+                        builderX += (256 / lengthNum) * (dotted ? 1.5 : 1); // 1 bar is 256 pixels (no matter the tempo)
+                    }
+                } else if (token.type === 'NOTE') {
+                    // notes will be placed starting from builderX
+                    // each note COULD have its own length, but notes starting with 'N' or not having a following number use the global length value
+                    let noteLength = length;
+                    let noteName = 'C';
+                    let noteOctave = octave;
+                    let notePitch = 0;
+
+                    if (token.value.startsWith('N')) {
+                        notePitch = Number(token.value.split('N')[1]);
+                        noteOctave = Math.floor(notePitch/12);
+                        noteName = noteNames[(notePitch - 12*noteOctave) % 12];
+                        let dotted = noteLength.includes('.');
+                        noteLength = Number(noteLength) * (dotted ? 2/3 : 1);
+                    } else {
+                        let sharp = token.value.includes('#') || token.value.includes('+');
+                        let flat = token.value.includes('-');
+                        let dotted = token.value.includes('.');
+                        noteName = getEnharmonicEquivalent(token.value.slice(0, 1 + sharp + flat));
+                        let noteIndex = noteNames.indexOf(noteName);
+                        if (noteIndex === 11 && flat)
+                            noteOctave -= 1;
+                        if (noteIndex === 0 && sharp)
+                            noteOctave += 1;
+                        if (token.value.length - dotted > 1 + sharp + flat) { // If the note has a length added on
+                            noteLength = Number(token.value.slice(((sharp || flat) ? 2 : 1), token.value.length)) * (dotted ? 2/3 : 1);
+                        } else { // If the note has no added length
+                            let Ldotted = length.includes('.');
+                            dotted = Ldotted || dotted;
+                            noteLength = Number(length) * (dotted ? 2/3 : 1);
+                        }
+                        notePitch = noteNames.indexOf(noteName) + 12 * noteOctave;
+                    }
+
+                    const newNote = {
+                        left: builderX, // In pixels
+                        top: 2568 - notePitch * gridHeight, // In pixels, the top of the note
+                        width: 256/noteLength - 1, // In pixels (we assume 4/4 time, which is 16 pixels per beat)
+                        highlighted: false,
+                        color: newTrack.color,
+                        id: notesInGrid.value.length + Date.now(),
+                        name: noteName + noteOctave, 
+                        pitch: notePitch + 12,
+                        length: noteLength, // In beats
+                        start: builderX, // In beats
+                        end: builderX + noteLength, // In beats
+                        volume: Number(volume),
+                        track: newTrack
+                    };
+                    notesInGrid.value.push(newNote);
+                    newNote.track.notes.unshift(newNote);
+                    builderX += newNote.width + 1;
+                    previousNote = newNote;
+                }
+            }
+        }
+
+        function parseMMLNotation(mmlString) {
+            const segments = mmlString.replace(/\s/, '').toUpperCase().match(/MML@([^;]+);/)[1].split(',');
+            for (const segment of segments) {
+                if (segment.length > 0)
+                    mmlToNewTrack(null, tokenizeMML(segment));
+            }
+        }
+
+        function parseMabiNotation(mabiString) {
+            const lines = mabiString.split("\r\n"); // Goes title, composer, melody, harmony1, harmony2, song
+            let tokenizedSections = [];
+            for (let i = 2; i < lines.length; ++i) {
+                let line = lines[i].split(" : ");
+                if (line.length < 2) {
+                    continue;
+                }
+                tokenizedSections.push({title: line[0].trim(), tokens: tokenizeMML(line[1].trim().toUpperCase())});
+            }
+
+            // Convert the titles and tokens into tracks with notes in them (and any tempo markers).
+            for (const section of tokenizedSections) {
+                if (section.tokens.length > 0) {
+                    mmlToNewTrack(section.title, section.tokens);
+                }
+            }
+
+        }
+
+        function parseMML(mmlString) {
+            if (mmlString.trim().startsWith("MML@") && mmlString.trim().endsWith(";")) {
+                parseMMLNotation(mmlString);
+            } else {
+                parseMabiNotation(mmlString);
+            }
+        }
+
+        async function parseMMLFromClipboard() {
+            const textFromClipboard = await navigator.clipboard.readText();
+            parseMML(textFromClipboard);
+            showSuccessMessage(`Successfully imported tracks from clipboard!`, 1000);
+        }
+
+        const removeNote = (note, fromList, event=null) => {
+            if (event && event.buttons !== 2)
+                return;
+            selectedNotes.value = selectedNotes.value.filter(n => n.id !== note.id);
+            let oldSize = notesInGrid.value.length;
             notesInGrid.value = notesInGrid.value.filter(n => n.id !== note.id);
+            let diff = oldSize - notesInGrid.value.length;
+            // console.log(`Removed a note!`)
+            for (const track of tracks.value) {
+                track.notes = track.notes.filter(n => n.id !== note.id);
+            }
+            if (!fromList && isPlaying.value)
+                playSequence();
         };
 
         document.addEventListener('mousedown', (event) => {
@@ -390,16 +1934,48 @@ export default {
             startDrag,
             endDrag,
             startPlacingNote,
+            startVolumeChange,
             removeNote,
             gridWidth,
             gridHeight,
             gridSpan,
             startResize,
             endResize,
-            resizingNote,
             onResize,
             currentNoteLength,
-            playSequence
+            playSequence,
+            tempo,
+            handleGridClick,
+            handleGridScroll,
+            isSelecting,
+            rectangleStyle,
+            handleRulerClick,
+            markerPosition,
+            markerReplayPosition,
+            ruler,
+            loopSong,
+            trackify,
+            noteWidthToMML,
+            backgroundStyle,
+            genMML,
+            showSuccessNotification,
+            successNotificationText,
+            showFailedNotification,
+            failedNotificationText,
+            handleTrackSelected,
+            handleAddTrack,
+            handleRemoveTrack,
+            handleMuteTrack,
+            instrKeyMin,
+            instrKeyMax,
+            hexToRgba,
+            currentNoteVolume,
+            clickTempoMarker,
+            tempoMarkers,
+            updateColor,
+            zoomScalar,
+            autoScrollSong,
+            parseMMLFromClipboard
         };
     }
 };
@@ -419,6 +1995,18 @@ export default {
     background-color: #ddd;
 }
 
+.copyNotification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: #4caf50;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+}
+
 .instrument-selector {
     padding: 10px;
     background-color: #f0f0f0;
@@ -426,7 +2014,7 @@ export default {
 }
 
 .piano-roll {
-    height: 100vh;
+    height: 94vh;
     flex-wrap: wrap;
     display: flex;
     overflow-y: auto;
@@ -435,11 +2023,14 @@ export default {
 }
 
 .piano-keys {
+    padding-top: 30px;
+    background-color: #ccc;
     width: 10%;
     display: flex;
     flex-direction: column-reverse;
     padding-bottom: 18px;
     /* Higher notes at the top */
+    z-index: 12;
 }
 
 .octave {
@@ -503,25 +2094,131 @@ export default {
     position: relative;
 }
 
+.ruler {
+    position: fixed;
+    top: 0;
+    left: 0;
+    margin-top: 90px;
+    margin-left: calc(10% - 2px);
+    background-color: #eee;
+    height: 29px;
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    align-items: end;
+    font-size: 12px;
+    color: #333;
+    z-index: 11;
+    user-select: none;
+    cursor: pointer;
+}
+
+@media (max-width: 1162px) {
+    .ruler {
+        margin-top: 108px;
+    }
+}
+
+@media (max-width: 701px) {
+    .ruler {
+        margin-top: 124px;
+    }
+}
+
+@media (max-width: 625px) {
+    .ruler {
+        margin-top: 142px;
+    }
+}
+
+.ruler-tick-label {
+    position: absolute;
+    bottom: 0;
+    white-space: nowrap;
+    transform: translateX(5px);
+    font-size: 14px;
+    color: #333;
+}
+
+.marker-replay-triangle {
+    position: absolute;
+    width: 0;
+    height: 0;
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-top: 10px solid #bbb; /* Triangle color */
+    left: 50%;
+    bottom: 0; /* Inside the ruler */
+    transform: translateX(-50%);
+}
+
+.marker-wrapper {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    transform: translateX(-50%);
+    pointer-events: none;
+}
+
+.marker-triangle {
+    position: absolute;
+    width: 0;
+    height: 0;
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-top: 10px solid #f00; /* Triangle color */
+    left: 50%;
+    bottom: 0; /* Inside the ruler */
+    transform: translateX(-50%);
+    z-index: 100;
+}
+
+.marker-line {
+    position: absolute;
+    width: 2px;
+    height: 100vh;
+    background-color: #f00;
+    left: 50%;
+    bottom: - 100%; /* Below the ruler */
+    transform: translateX(-50%);
+    z-index: 100;
+}
+
 .grid {
+    padding-top: 17px;
+    margin-top: 30px;
+    left: -1px;
     position: absolute;
     display: flex;
-    min-width: 200%;
+    min-width: 100%;
     align-self: top;
     height: 100%;/*2592px;*/
-    background: repeating-linear-gradient(
+    background: repeating-linear-gradient( /*This is the horizontal lines*/
         0deg,
-        #ccc,
-        #ccc 2px,
+        #bbb,
+        #bbb 2px,
         transparent 2px,
         transparent 24px
     ),
-    repeating-linear-gradient(
+    repeating-linear-gradient( /*This is the Bar line*/
         90deg,
-        #ccc,
-        #ccc 2px,
+        #777,
+        #777 2px,
+        transparent 2px,
+        transparent 256px
+    ),
+    repeating-linear-gradient( /*This is the vertical lines*/
+        90deg,
+        #c0c0c0,
+        #c0c0c0 2px,
         transparent 2px,
         transparent 16px
+    ),
+    repeating-linear-gradient(/*This is the background colors*/
+        90deg,
+        #e0e0e0,
+        #e0e0e0 64px,
+        #ccc 64px,
+        #ccc 128px
     );
     z-index: 10;
     overflow: hidden;
@@ -539,6 +2236,8 @@ export default {
   justify-content: center;
   z-index: 20;
   font-size: 70%;
+  margin-left: 1px;
+  overflow: hidden;
 }
 
 .note:active {
@@ -549,10 +2248,24 @@ export default {
     position: absolute;
     right: 0;
     top: 0;
-    width: 10px; /* Adjust as needed */
+    width: 40%; /* Adjust as needed */
+    max-width: 10px;
     height: 100%;
     cursor: ew-resize;
     background-color: rgba(0, 0, 0, 0.2);
+}
+
+.volume-handle {
+  width: 12px;
+  height: 60%; /* Half the width to create the half-circle */
+  background-color: rgba(0, 0, 0, 0.2);
+  position: absolute;
+  bottom: -35%; /* Align to the bottom of the note */
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 50%; /* Create a circle */
+  clip-path: inset(0 0 50% 0); /* Clip top half, making it a half-circle */
+  cursor: ns-resize; /* Show a pointer to indicate draggable */
 }
 
 .play-button {
@@ -568,7 +2281,58 @@ export default {
   color: white;
   z-index: 1000; /* Ensure it's on top of other elements */
   outline: none;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 3px 4px rgba(0, 0, 0, 0.3);
+}
+
+.loop-wrapper {
+    position: fixed;
+    top: 10px;
+    right: 160px;
+    padding: 10px 20px;
+    height: 18px;
+    font-size: 16px;
+    cursor: pointer;
+    user-select: none;
+    background-color: #0078d4;
+    color: white;
+    border-radius: 5px;
+    box-shadow: 0 3px 4px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+}
+
+.scroll-wrapper {
+    position: fixed;
+    width: 108px;
+    top: 50px;
+    right: 10px;
+    padding: 10px 20px;
+    height: 18px;
+    font-size: 16px;
+    cursor: pointer;
+    border: none;
+    border-radius: 5px;
+    background-color: #0078d4;
+    color: white;
+    z-index: 1000; /* Ensure it's on top of other elements */
+    outline: none;
+    box-shadow: 0 3px 4px rgba(0, 0, 0, 0.3);
+}
+
+.controls {
+    display: flex;
+    align-items: center;
+}
+
+.instrument-selector,
+.tempo-selector {
+    margin-right: 15px;
+}
+
+.selection-rect {
+    position: absolute;
+    border: 1px solid rgba(0, 100, 255, 0.5);
+    background-color: rgba(0, 100, 255, 0.3);
+    z-index: 30;
 }
 
 </style>
