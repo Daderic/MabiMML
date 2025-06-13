@@ -33,7 +33,8 @@
             </div>
             <button class="track-splitter" @click="trackify">Split Track</button>
             <button class="MML-converter" @click="genMML" style="margin-left: 10px;">Gen MML</button>
-            <button @click="parseMMLFromClipboard" style="margin-left : 10px;">Import MML From Clipboard</button>
+            <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
+            <button @click="importMidi" style="margin-left: 10px;">Import MIDI (placeholder)</button>
             <div class="grid-division-selector">
                 <label for="grid-select" style="padding-left: 10px">Grid Spacing: </label>
                 <select id="grid-select" v-model="gridWidth">
@@ -126,8 +127,9 @@
                     </div>
                     <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
                 </div> -->
-                <div class="grid" ref="grid">
-                    <canvas class="gridCanvas" ref="gridCanvas" :width="gridSpan*zoomScalar" :height="2592" @mousedown.left="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll" />
+                <div class="grid" ref="grid" :style="{width: gridSpan * zoomScalar + 'px', height: 2622 + 'px'}">
+                    <div :style="{width: scrollX + 'px'}" />
+                    <canvas class="gridCanvas" ref="gridCanvas" :width="windowWidth*0.9 - 14" :height="2592" @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll" />
                     <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
                 </div>
             </div>
@@ -162,6 +164,7 @@ export default {
         const loopSong = ref(false);
         const autoScrollSong = ref(false);
         const gridCanvas = ref(null);
+        const windowWidth = ref(window.innerWidth);
 
         const instruments = ref([
             { name: 'Lute', program: 0, min: 16, max: 88 },
@@ -211,6 +214,7 @@ export default {
         const startTop = ref(0);
         const startWidth = ref(0);
         const gridSpan = ref(window.innerWidth);
+        const gridWrapper = ref(null);
 
         const scrollX = ref(0);
 
@@ -273,122 +277,122 @@ export default {
         function drawCanvasGrid() {
             if (!ctx) return;
 
-            //const startTime = performance.now();
-
-            const gridWrapper = document.querySelector('.grid-wrapper');
-            const screenLeft = gridWrapper.scrollLeft;
+            const screenLeft = scrollX.value;
             const screenRight = screenLeft + window.innerWidth;
-
-            const width = gridSpan.value * zoomScalar.value;
+            const zoom = zoomScalar.value;
+            const grid = gridWidth.value;
+            const width = gridSpan.value * zoom;
             const height = 12 * 9 * gridHeight; // numKeys * keyHeight
 
             ctx.clearRect(0, 0, width, height);
 
-            // ---- Horizontal Lines: every 24px, 2px thick, color #bbb ----
+            // --- Draw Horizontal Grid Lines ---
             ctx.strokeStyle = '#bbb';
             ctx.lineWidth = 2;
             const horizontalSpacing = 24;
-            for (let y = 0; y <= height; y += horizontalSpacing) {
-                ctx.beginPath();
-                ctx.moveTo(screenLeft, y);
+            const hCount = Math.ceil(height / horizontalSpacing);
+            ctx.beginPath();
+            for (let i = 0; i <= hCount; i++) {
+                const y = i * horizontalSpacing;
+                ctx.moveTo(0, y);
                 ctx.lineTo(screenRight, y);
+            }
+            ctx.stroke();
+
+            if (zoom > 1/8) {
+
+                // --- Vertical Subdivisions ---
+                ctx.strokeStyle = '#c0c0c0';
+                ctx.lineWidth = 2;
+                let verticalSpacing = 0;
+                let gridwidth = ((gridWidth.value)**(-1)*256);
+                if (zoom > 1/8 && zoom <= 1/2) {
+                    verticalSpacing = gridwidth == 12 ? grid * 4 * zoom : grid * 8 * zoom;
+                } else if (zoom > 1/2 && zoom <= 7/8) {
+                    verticalSpacing = grid * 4 * zoom;
+                } else if (zoom > 7/8 && zoom < 2.5) {
+                    verticalSpacing = grid * 2 * zoom;
+                } else if (zoom >= 2.5) {
+                    verticalSpacing = grid * zoom;
+                }
+                const vStart = Math.max(0, Math.floor(screenLeft / verticalSpacing) - 1);
+                const vEnd = Math.ceil(screenRight / verticalSpacing) + 1;
+                ctx.beginPath();
+                for (let i = vStart; i <= vEnd; i++) {
+                    const x = i * verticalSpacing - screenLeft;
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                }
                 ctx.stroke();
             }
 
-            // ---- Vertical Subdivisions: every 16px, 2px thick, color #c0c0c0 ----
-            ctx.strokeStyle = '#c0c0c0';
-            ctx.lineWidth = 2;
-            const verticalSpacing = gridWidth.value * zoomScalar.value;
-            for (let x = 0; x <= width; x += verticalSpacing) {
-                if (x < screenLeft || x > screenRight) continue;
-                ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, height);
-                ctx.stroke();
-            }
-            
-            // ---- Bar Lines: every 256 * zoomScalar, 2px thick, color #777 ----
+            // --- Bar Lines ---
             ctx.strokeStyle = '#777';
             ctx.lineWidth = 2;
-            const barSpacing = 256 * zoomScalar.value;
-            for (let x = 0; x <= width; x += barSpacing) {
-                if (x < screenLeft || x > screenRight) continue;
-                ctx.beginPath();
+            const barSpacing = 256 * zoom;
+            const bStart = Math.max(0, Math.floor(screenLeft / barSpacing) - 1);
+            const bEnd = Math.ceil(screenRight / barSpacing) + 1;
+            ctx.beginPath();
+            for (let i = bStart; i <= bEnd; i++) {
+                const x = i * barSpacing - screenLeft;
                 ctx.moveTo(x, 0);
                 ctx.lineTo(x, height);
-                ctx.stroke();
+            }
+            ctx.stroke();
+
+            // --- Notes ---
+            const notes = notesInGrid.value;
+            if (!notes || notes.length === 0) return;
+
+            const visibleNotes = [];
+            const leftLimit = screenLeft / zoom;
+            const rightLimit = screenRight / zoom;
+
+            for (const note of notes) {
+                const noteLeft = note.left;
+                const noteRight = noteLeft + note.width;
+                if (noteRight < leftLimit || noteLeft > rightLimit) continue;
+                if (note.muted) continue;
+                visibleNotes.push(note);
             }
 
-            // ---- Optional: Notes ----
-            if (notesInGrid.value) {
+            for (const note of visibleNotes) {
+                const x = note.left * zoom - screenLeft;
+                const y = note.top;
+                const noteWidth = (note.width + 1) * zoom - 1;
+                const h = gridHeight;
 
-                const visibleNotes = notesInGrid.value.filter(note => {
-                    const noteRight = (note.left + note.width) * zoomScalar.value;
-                    return (
-                        noteRight >= screenLeft &&
-                        note.left * zoomScalar.value <= screenRight
-                    );
-                });
+                // Note body
+                ctx.fillStyle = hexToRgba(note.color, (note.volume + 1) / 15);
+                ctx.fillRect(x, y, noteWidth, h);
 
-                console.log(visibleNotes.length);
+                // Border
+                ctx.strokeStyle = note.highlighted ? 'white' : note.color;
+                ctx.lineWidth = note.highlighted ? 2 : 1;
+                ctx.strokeRect(x, y, noteWidth, h);
 
-                for (const note of visibleNotes) {
-                    if (note.muted) continue;
+                // Volume handle (semi-circle)
+                const semiCircleRadius = Math.max(0, Math.min(6, noteWidth / 4));
+                const centerX = x + noteWidth / 2;
+                const centerY = y + h + semiCircleRadius * 0.35 - 1;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, semiCircleRadius, Math.PI, 0, false);
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                ctx.fill();
 
-                    const x = note.left * zoomScalar.value;
-                    const y = note.top;
-                    const width = (note.width + 1) * zoomScalar.value - 1;
-                    const height = gridHeight;
+                // Resize handle
+                const barWidth = Math.min(10, noteWidth * 0.4);
+                ctx.fillRect(x + noteWidth - barWidth, y, barWidth, h);
 
-                    // Draw filled note background
-                    ctx.fillStyle = hexToRgba(note.color, (note.volume + 1) / 15);
-                    ctx.fillRect(x, y, width, height);
-
-                    // Draw note border
-                    ctx.strokeStyle = note.highlighted ? 'white' : note.color;
-                    ctx.lineWidth = note.highlighted ? 2 : 1;
-                    ctx.strokeRect(x, y, width, height);
-
-                    // Draw volume handle
-                    const semiCircleRadius = Math.min(6, width / 4);
-                    const centerX = x + width/2;
-                    const centerY = y + height + semiCircleRadius * 0.35 - 1;
-
-                    ctx.beginPath();
-                    ctx.arc(centerX, centerY, semiCircleRadius, Math.PI, 0, false);
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-                    ctx.fill();
-
-                    // Draw resize handle
-                    const barWidth = Math.min(10, width * 0.4);
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-                    ctx.fillRect(x + width - barWidth, y, barWidth, height);
-
-                    // Draw note label text
-                    const label = `${note.name} (${note.volume})`;
-                    ctx.font = '11px sans-serif';
-                    ctx.fillStyle = '#444';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-
-                    const textX = x + width / 2;
-                    const textY = y + height / 2;
-
-                    // ctx.save();
-                    // ctx.beginPath();
-                    // ctx.rect(x, y, width, height);
-                    // ctx.clip();
-
-                    ctx.fillText(label, textX, textY);
-
-                    // ctx.restore();
-                }
+                // Text
+                ctx.font = '11px sans-serif';
+                ctx.fillStyle = '#444';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(`${note.name} (${note.volume})`, x + noteWidth / 2, y + h / 2);
             }
-
-            //const endTime = performance.now();
-            //console.log(`Drawing took ${endTime - startTime} ms`);
-
         }
+
 
 
         // Left-hand Piano notes, not grid notes
@@ -414,6 +418,9 @@ export default {
         watchEffect(() => {
             const maxRightPosition = Math.max(...notesInGrid.value.map(note => note.left + note.width), 0);
             gridSpan.value = Math.max((maxRightPosition + window.innerWidth/zoomScalar.value), window.innerWidth/zoomScalar.value);
+            windowWidth.value = window.innerWidth;
+            if (document.querySelector('.grid-wrapper'))
+                scrollX.value = gridWrapper.value.scrollLeft;
         });
 
         watch(notesInGrid, () => {
@@ -447,8 +454,13 @@ export default {
         };
 
         const handleRemoveTrack = async (oldTrack, newTrack) => {
-            for (const note of oldTrack.notes) {
-                removeNote(note, true);
+            const idsToRemove = new Set(oldTrack.notes.map(n => n.id));
+
+            selectedNotes.value = selectedNotes.value.filter(n => !idsToRemove.has(n.id));
+            notesInGrid.value = notesInGrid.value.filter(n => !idsToRemove.has(n.id));
+
+            for (const track of tracks.value) {
+                track.notes = track.notes.filter(n => !idsToRemove.has(n.id));
             }
 
             tempoMarkers.value = tempoMarkers.value.filter(marker => marker.parentTrack.id !== oldTrack.id);
@@ -499,9 +511,12 @@ export default {
 
         onMounted(async () => {
             try {
-                const gridWrapper = document.querySelector('.grid-wrapper');
-                if (gridWrapper) {
-                    gridWrapper.addEventListener('scroll', updateRuler);
+                windowWidth.value = window.innerWidth;
+                
+                const gridWrapperVar = document.querySelector('.grid-wrapper');
+                if (gridWrapperVar) {
+                    gridWrapper.value = gridWrapperVar;
+                    gridWrapperVar.addEventListener('scroll', updateRuler);
                     updateRuler();
                 }
 
@@ -618,7 +633,6 @@ export default {
                 tempoIdx++;
                 marker = tempoMarkers.value[tempoIdx];
             }
-            const gridWrapper = document.querySelector('.grid-wrapper');
             function tick() {
                 if (markerPosition.value < 0) {
                     startTempo = tempo.value;
@@ -644,7 +658,7 @@ export default {
 
                 markerPosition.value = ((seq.value.currentTime - timeChange) * 4 * 16 * startTempo / 60) + markerStartPos;
                 if (autoScrollSong.value) {
-                    gridWrapper.scrollLeft = markerPosition.value * zoomScalar.value - screen.width * 0.66;
+                    gridWrapper.value.scrollLeft = markerPosition.value * zoomScalar.value - window.innerWidth * 0.66;
                 }
                 if (seq.value && !loopSong.value)
                     seq.value.loop = loopSong.value;
@@ -838,47 +852,67 @@ export default {
                 event.preventDefault();
                 // Paste selected notes from "clipboard" into the selected track.
                 clearSelection();
-                for (const note of noteClipboard) {
+                const baseId = Date.now(); // Avoid calling Date.now() in every iteration
+                const track = selectedTrack.value;
+                const trackColor = track.color;
+                const scroll = scrollX.value;
+                const zoom = zoomScalar.value;
+                const grid = gridWidth.value;
+
+                const idOffset = notesInGrid.value.length;
+
+                const newNotes = [];
+
+                for (let i = 0; i < noteClipboard.length; i++) {
+                    const note = noteClipboard[i];
                     const newNote = {
-                        id: notesInGrid.value.length + Date.now(),
+                        id: baseId + idOffset + i,
                         name: note.name,
-                        left: Math.round(Math.round((note.left + scrollX.value/zoomScalar.value)*gridWidth.value/4)*4/gridWidth.value),
+                        left: Math.round(Math.round((note.left + scroll / zoom) * grid / 4) * 4 / grid),
                         top: note.top,
                         pitch: note.pitch,
                         width: note.width,
                         length: note.length,
                         highlighted: true,
-                        color: selectedTrack.value.color,
+                        color: trackColor,
                         start: note.start,
                         end: note.end,
                         volume: note.volume,
                         muted: false,
-                        track: selectedTrack.value
+                        track: track
                     };
-                    selectedNotes.value.push(newNote);
-                    notesInGrid.value.push(newNote);
-                    newNote.track.notes.unshift(newNote);
+                    newNotes.push(newNote);
                 }
+
+                // Push all at once
+                selectedNotes.value.push(...newNotes);
+                notesInGrid.value.push(...newNotes);
+                track.notes.unshift(...newNotes.reverse()); // unshift in correct order
+
                 showSuccessMessage(`Pasted ${noteClipboard.length} notes from the clipboard!`, 1000);
             } else if (event.key === 't' && selectedNotes.value.length > 0) {
+                const selectedSet = new Set(selectedNotes.value);
+
                 for (const track of tracks.value) {
-                    track.notes = track.notes.filter((note) => { return !selectedNotes.value.includes(note); });
+                    track.notes = track.notes.filter(note => !selectedSet.has(note));
                 }
-                for (const note of selectedNotes.value) {
+
+                selectedNotes.value.forEach(note => {
                     note.track = selectedTrack.value;
                     note.color = selectedTrack.value.color;
-                    selectedTrack.value.notes.unshift(note);
-                }
+                });
+
+                selectedTrack.value.notes.unshift(...[...selectedNotes.value].reverse());
+
                 showSuccessMessage(`Moved ${selectedNotes.value.length} notes into track "${selectedTrack.value.name}"!`, 1000);
             }
         }
 
+
         function updateRuler() {
-            const gridWrapper = document.querySelector('.grid-wrapper');
-            const ruler = document.querySelector('.ruler');
-            if (gridWrapper && ruler) {
-                scrollX.value = gridWrapper.scrollLeft;
-                ruler.style.left = -scrollX.value + 'px'; // Adjust ruler's left position
+            if (gridWrapper.value && ruler.value) {
+                scrollX.value = gridWrapper.value.scrollLeft;
+                ruler.value.style.left = -scrollX.value + 'px'; // Adjust ruler's left position
             }
             drawCanvasGrid();
         }
@@ -1061,9 +1095,14 @@ export default {
                 }
 
                 if (event.shiftKey && placeNote) {
-                    for (const note of draggingNotes.value) {
+                    const baseId = Date.now();
+                    const initialLength = notesInGrid.value.length;
+                    const newNotes = [];
+
+                    for (let i = 0; i < draggingNotes.value.length; i++) {
+                        const note = draggingNotes.value[i];
                         const newNote = {
-                            id: notesInGrid.value.length + Date.now(),
+                            id: baseId + initialLength + i,
                             name: note.name,
                             left: note.left,
                             top: note.top,
@@ -1078,9 +1117,15 @@ export default {
                             muted: false,
                             track: note.track
                         };
-                        notesInGrid.value.push(newNote);
-                        newNote.track.notes.unshift(newNote);
+                        newNotes.push(newNote);
                     }
+
+                    // Bulk update reactive arrays outside the loop
+                    notesInGrid.value.push(...newNotes);
+                    newNotes.forEach(note => {
+                        note.track.notes.unshift(note);
+                    });
+
                 }
 
                 for (const draggingNote of draggingNotes.value) {
@@ -1325,7 +1370,7 @@ export default {
         };
 
         const handleGridClick = (event) => {
-            if (event.ctrlKey && draggingNotes.value.length <= 0) {
+            if (event.ctrlKey && draggingNotes.value.length <= 0 && event.button === 0) {
                 if (!event.shiftKey)
                     clearSelection();
                 startSelection(event);
@@ -1339,15 +1384,14 @@ export default {
             const deltaY = -Math.sign(event.deltaY)*1/8;
             if (event.ctrlKey) {
                 event.preventDefault();
-                const gridWrapper = document.querySelector('.grid-wrapper');
                 const z1 = zoomScalar.value;
-                const l = gridWrapper.scrollLeft;
-                const x = (event.clientX - gridWrapper.getBoundingClientRect().left + l);
+                const l = gridWrapper.value.scrollLeft;
+                const x = (event.clientX - gridWrapper.value.getBoundingClientRect().left + l);
                 zoomScalar.value = Math.min(8, Math.max(1/8, Math.round((zoomScalar.value+deltaY)*8)/8)); // Making sure that the zoom is in multiples of 1/8th
                 const z2 = zoomScalar.value;
-                gridWrapper.scrollLeft += x*(z2/z1 - 1);
+                gridWrapper.value.scrollLeft += x*(z2/z1 - 1);
             }
-            console.log(gridCanvas.value.width);
+            //console.log(gridCanvas.value.width);
         }
 
         function clearSelection() {
@@ -1361,9 +1405,9 @@ export default {
             event.preventDefault();
             isSelecting.value = true;
             const rect = gridCanvas.value.getBoundingClientRect();
-            startX.value = event.clientX - rect.left;
+            startX.value = event.clientX - rect.left + scrollX.value;
             startY.value = event.clientY - rect.top;
-            currentX.value = event.clientX - rect.left;
+            currentX.value = event.clientX - rect.left + scrollX.value;
             currentY.value = event.clientY - rect.top;
             document.addEventListener('mousemove', onSelectionMove);
             document.addEventListener('mouseup', onSelectionEnd);
@@ -1372,7 +1416,7 @@ export default {
         const onSelectionMove = (event) => {
             if (isSelecting.value) {
                 const rect = gridCanvas.value.getBoundingClientRect();
-                currentX.value = event.clientX - rect.left;
+                currentX.value = event.clientX - rect.left + scrollX.value;
                 currentY.value = event.clientY - rect.top;
                 // console.log(currentX.value, currentY.value);
                 // This is where we add the logic to highlight the notes that might be selected (or we can select them I dont really care)
@@ -1434,12 +1478,12 @@ export default {
             }
 
             const rect = gridCanvas.value.getBoundingClientRect();
-            const x = (event.clientX - rect.left + grid.value.scrollLeft*zoomScalar.value);
+            const x = (event.clientX - rect.left + scrollX.value) / zoomScalar.value;
             const y = event.clientY - rect.top + grid.value.scrollTop;
 
-            let left = Math.round((x - gridWidth.value / 2) / gridWidth.value / zoomScalar.value) * gridWidth.value;
+            let left = Math.round((x - gridWidth.value / 2) / gridWidth.value) * gridWidth.value;
             if (event.altKey)
-                left = Math.round((x - gridWidth.value / 2) / (gridWidth.value/4) / zoomScalar.value) * gridWidth.value/4;
+                left = Math.round((x - gridWidth.value / 8) / (gridWidth.value/4)) * gridWidth.value/4;
 
             const top = Math.round((y - gridHeight / 2) / gridHeight) * gridHeight;
 
@@ -1453,6 +1497,8 @@ export default {
             );
 
             if (!existingNote) {
+                if (event.button !== 0)
+                    return;
                 clearSelection();
                 const id = notesInGrid.value.length + Date.now();
                 const newNote = {
@@ -1475,7 +1521,36 @@ export default {
                 startDrag(notesInGrid.value.find(note => note.id == id), event, false);
                 //console.log('NOTE X,Y', newNote.left, newNote.top);
             } else {
-                startDrag(existingNote, event);
+                // Here, we have identified that we clicked on an existing note.
+                // if we left click, do the below.
+                // if we click within the note-length handle, call the handle drag method
+                if (event.button === 0) {
+                    const resizeHandleWidth = Math.min(10, existingNote.width * 0.4);
+                    const volumeHandleCenter = { x: existingNote.left + existingNote.width / 2, y: existingNote.top + gridHeight };
+                    const squaredDistToCenter = (volumeHandleCenter.x - x) ** 2 + (volumeHandleCenter.y - y) ** 2;
+                    const radius = Math.min(6, existingNote.width / 4);
+                    if (existingNote.left + existingNote.width - resizeHandleWidth <= x && x <= existingNote.left + existingNote.width) {
+                        startResize(existingNote, event);
+                    } else if (squaredDistToCenter <= radius * radius) {
+                        // if we click within the note-volume handle, call the handle volume method or whatever it is
+                        startVolumeChange(existingNote, event);
+                    } else {
+                        startDrag(existingNote, event);
+                    }
+                } else if (event.button === 2) {
+                    removeNote(existingNote, false);
+                }
+                // if we right click, delete the note
+                // otherwise, start drag
+
+                /*
+                @mousedown.left="startDrag(note, $event)"
+                @mouseup.left="endDrag"
+                @mousedown.right.prevent="removeNote(note, false, $event)"
+                @mouseover="removeNote(note, false, $event)">
+                <div class="resize-handle" @mousedown="startResize(note, $event)"></div>
+                <div class="volume-handle" @mousedown="startVolumeChange(note, $event)"></div>
+                */
             }
         };
 
@@ -2047,6 +2122,26 @@ export default {
             showSuccessMessage(`Successfully imported tracks from clipboard!`, 1000);
         }
 
+        function tryRemoveNote(event) {
+            if (event && event.buttons !== 2)
+                return;
+
+            const rect = gridCanvas.value.getBoundingClientRect();
+            const x = (event.clientX - rect.left + scrollX.value) / zoomScalar.value;
+            const y = event.clientY - rect.top + grid.value.scrollTop;
+
+            for (const note of notesInGrid.value) {
+                const left = note.left;
+                const right = left + note.width;
+                const top = note.top;
+                const bottom = note.top + gridHeight;
+                const intersects = left <= x && x <= right && y >= top && y <= bottom;
+                if (intersects) {
+                    removeNote(note, false, event);
+                }
+            }
+        }
+
         const removeNote = (note, fromList, event=null) => {
             if (event && event.buttons !== 2)
                 return;
@@ -2128,7 +2223,11 @@ export default {
             zoomScalar,
             autoScrollSong,
             parseMMLFromClipboard,
-            gridCanvas
+            gridCanvas,
+            windowWidth,
+            scrollX,
+            gridWrapper,
+            tryRemoveNote
         };
     }
 };
@@ -2339,6 +2438,7 @@ export default {
 .grid {
     position: absolute;
     overflow: hidden;
+    display: flex;
     /* padding-top: 17px;
     margin-top: 30px;
     left: -1px;
@@ -2494,6 +2594,7 @@ export default {
     margin-top: 30px;
     display: block;
     z-index: 10;
+    left: 0px;
 }
 
 </style>
