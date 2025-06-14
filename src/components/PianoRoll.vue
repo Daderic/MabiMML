@@ -34,7 +34,8 @@
             <button class="track-splitter" @click="trackify">Split Track</button>
             <button class="MML-converter" @click="genMML" style="margin-left: 10px;">Gen MML</button>
             <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
-            <button @click="importMidi" style="margin-left: 10px;">Import MIDI (placeholder)</button>
+            <button @click="importMidi" style="margin-left: 10px;">Import MIDI</button>
+            <input type="file" id="hiddenFileInput" style="display: none" accept=".mid,.midi" />
             <div class="grid-division-selector">
                 <label for="grid-select" style="padding-left: 10px">Grid Spacing: </label>
                 <select id="grid-select" v-model="gridWidth">
@@ -139,7 +140,7 @@
 
 <script>
 import { ref, onMounted, watchEffect, computed, onBeforeUnmount, watch, nextTick, mergeProps } from 'vue';
-import { Synthetizer, MIDIBuilder, writeMIDIFile, Sequencer, consoleColors, SpessaSynthLogging } from "spessasynth_lib";
+import { Synthetizer, MIDIBuilder, writeMIDIFile, Sequencer, consoleColors, SpessaSynthLogging, MIDI } from "spessasynth_lib";
 import HelpMenu from '@/components/HelpMenu.vue'
 import Tracks from '@/components/Tracks.vue'
 import { selectedTrack, tracks, selectedTrackIndex, trackHexColor, EventBus } from '@/components/Tracks.vue'
@@ -389,8 +390,28 @@ export default {
                 ctx.fillStyle = '#444';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(`${note.name} (${note.volume})`, x + noteWidth / 2, y + h / 2);
+
+                const fullText = `${note.name} (${note.volume})`;
+                const truncatedText = truncateTextToWidth(ctx, fullText, noteWidth);
+
+                if (truncatedText) {
+                    ctx.fillText(truncatedText, x + noteWidth / 2, y + h / 2);
+                }
             }
+        }
+
+        function truncateTextToWidth(ctx, text, maxWidth) {
+            const ellipsis = '…';
+            if (ctx.measureText(text).width <= maxWidth) return text;
+
+            let truncated = text;
+            while (truncated.length > 0) {
+                truncated = truncated.slice(0, -1);
+                if (ctx.measureText(truncated + ellipsis).width <= maxWidth) {
+                    return truncated + ellipsis;
+                }
+            }
+            return '';
         }
 
 
@@ -931,7 +952,9 @@ export default {
                     markerPosition.value = markerReplayPosition.value;
                     return;
                 }
-                midiBuilder.value = new MIDIBuilder("untitled", 480, tempo.value);
+
+                const tempMidiBuilder = new MIDIBuilder("untitled", 480, tempo.value);
+
                 //midiBuilder.value.addEvent(0, 0, 0xC0, [selectedInstrument.value.program]);
                 
                 await context.value.resume();
@@ -944,7 +967,7 @@ export default {
                 for (const track of tracks.value) {
                     if (!track.isMuted) {
                         audibleTracks.push(track);
-                        midiBuilder.value.addNewTrack(track.name + tracks.value.indexOf(track));
+                        tempMidiBuilder.addNewTrack(track.name + tracks.value.indexOf(track));
                     }
                 }
 
@@ -971,9 +994,9 @@ export default {
 
                         
 
-                        midiBuilder.value.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
-                        midiBuilder.value.addNoteOn(startTime, trackIndex, channel, pitch, volume);
-                        midiBuilder.value.addNoteOff(startTime + duration - 1, trackIndex, channel, pitch);
+                        tempMidiBuilder.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
+                        tempMidiBuilder.addNoteOn(startTime, trackIndex, channel, pitch, volume);
+                        tempMidiBuilder.addNoteOff(startTime + duration - 1, trackIndex, channel, pitch);
                         notesAdded++;
                     }
                 });
@@ -984,14 +1007,16 @@ export default {
                     const tempoStartTime = tempoMarker.left/16*120;
                     const markerTime = markerPosition.value/16*120;
                     const tempoChangeTime = Math.max(tempoStartTime, markerTime)-markerTime;
-                    midiBuilder.value.addSetTempo(tempoChangeTime, tempoMarker.tempo);
+                    tempMidiBuilder.addSetTempo(tempoChangeTime, tempoMarker.tempo);
                 }
 
                 if (notesAdded === 0) {
                     return;
                 }
 
-                midiBuilder.value.flush();
+                tempMidiBuilder.flush();
+                
+                midiBuilder.value = tempMidiBuilder;
 
                 const b = await(writeMIDIFile(midiBuilder.value));
                 seq.value = new Sequencer([{binary: b}], synth.value);
@@ -1525,11 +1550,11 @@ export default {
                 // if we left click, do the below.
                 // if we click within the note-length handle, call the handle drag method
                 if (event.button === 0) {
-                    const resizeHandleWidth = Math.min(10, existingNote.width * 0.4);
-                    const volumeHandleCenter = { x: existingNote.left + existingNote.width / 2, y: existingNote.top + gridHeight };
+                    const resizeHandleWidth = Math.min(10, (existingNote.width + 1) * 0.4);
+                    const volumeHandleCenter = { x: existingNote.left + (existingNote.width + 1) / 2, y: existingNote.top + gridHeight };
                     const squaredDistToCenter = (volumeHandleCenter.x - x) ** 2 + (volumeHandleCenter.y - y) ** 2;
-                    const radius = Math.min(6, existingNote.width / 4);
-                    if (existingNote.left + existingNote.width - resizeHandleWidth <= x && x <= existingNote.left + existingNote.width) {
+                    const radius = Math.min(6, (existingNote.width + 1) / 4);
+                    if (x >= existingNote.left + existingNote.width + 1 - resizeHandleWidth && x <= existingNote.left + existingNote.width + 1) {
                         startResize(existingNote, event);
                     } else if (squaredDistToCenter <= radius * radius) {
                         // if we click within the note-volume handle, call the handle volume method or whatever it is
@@ -1609,7 +1634,7 @@ export default {
                 }
             }
 
-            if (tracks.value.length + trackWrappers.length - 1 > 16) {
+            if (tracks.value.length + trackWrappers.length - 1 > 160) {
                 showFailureMessage('Failed to split track! (Process would create too many tracks!)');
                 return;
             }
@@ -2116,6 +2141,202 @@ export default {
             }
         }
 
+        function importMidi() {
+            // Let user choose and "upload" MIDI file
+            const hiddenFileInput = document.getElementById('hiddenFileInput');
+            hiddenFileInput.click();
+
+            let handleFileSelect = async () => {
+                const file = hiddenFileInput.files[0];
+                
+                hiddenFileInput.removeEventListener('change', handleFileSelect);
+
+                if (file) {
+                    const reader = new FileReader();
+
+                    reader.onload = async function(e) {
+                        const arrayBuffer = e.target.result;
+
+                        try {
+                            const parsedMIDI = new MIDI(arrayBuffer);
+                            await parsedMIDI.isReady;
+
+                            console.log(parsedMIDI);
+
+                            const ticksPerBeat = parsedMIDI.timeDivision;
+                            const fileDuration = parsedMIDI.duration;
+                            const fileTempo = parsedMIDI.tempoChanges.at(-2).tempo;
+
+
+                            parsedMIDI.tracks.forEach((track, idx) => {
+
+                                const trackName = track.name || `Track ${idx}`;
+                                //console.log(trackName);
+                                
+                                const activeNotes = []; // {pitch: 66, ticks: 44, velocity: 127}
+                                const sustainBuffer = [];
+                                const pairedNotes = []; // {startTicks: 1, pitch: 66, duration: 76 (in ticks, end ticks minus start ticks), velocity: 65}
+
+                                let pedalDown = false;
+
+                                track.forEach(midiMessage => {
+                                    const status = midiMessage.messageStatusByte;
+                                    const data = midiMessage.messageData;
+                                    const ticks = midiMessage.ticks;
+
+                                    if ((status & 0xF0) === 0x90 && data[1] > 0) {
+                                        activeNotes.push({
+                                            pitch: data[0],
+                                            ticks,
+                                            velocity: data[1]
+                                        });
+                                    }
+
+                                    // Note-off (either via 0x80 or 0x90 velocity=0)
+                                    else if (((status & 0xF0) === 0x80) || ((status & 0xF0) === 0x90 && data[1] === 0)) {
+                                        const pitch = data[0];
+                                        const endTicks = ticks;
+
+                                        const index = activeNotes.findIndex(n => n.pitch === pitch);
+                                        if (index !== -1) {
+                                            const startNote = activeNotes.splice(index, 1)[0];
+
+                                            if (pedalDown) {
+                                                sustainBuffer.push({
+                                                    pitch: startNote.pitch,
+                                                    startTicks: startNote.ticks,
+                                                    velocity: startNote.velocity,
+                                                    originalEndTicks: endTicks
+                                                });
+                                            } else {
+                                                pairedNotes.push({
+                                                    startTicks: startNote.ticks,
+                                                    pitch: startNote.pitch,
+                                                    duration: endTicks - startNote.ticks,
+                                                    velocity: startNote.velocity
+                                                });
+                                            }
+                                        }
+                                    }
+
+                                    // Sustain Pedal (Control Change 64)
+                                    else if ((status & 0xF0) === 0xB0 && data[0] === 64) {
+                                        const value = data[1];
+                                        const wasDown = pedalDown;
+                                        pedalDown = value >= 64;
+
+                                        if (wasDown && !pedalDown) {
+                                            // Pedal released – finalize all sustained notes
+                                            for (const note of sustainBuffer) {
+                                                pairedNotes.push({
+                                                    startTicks: note.startTicks,
+                                                    pitch: note.pitch,
+                                                    duration: ticks - note.startTicks,
+                                                    velocity: note.velocity
+                                                });
+                                            }
+                                            sustainBuffer.length = 0;
+                                        }
+                                    }
+
+                                    // Optionally, handle program change, tempo, etc., elsewhere
+                                });
+
+                                // Optional: handle any dangling notes at end of track
+                                for (const note of activeNotes) {
+                                    pairedNotes.push({
+                                        startTicks: note.ticks,
+                                        pitch: note.pitch,
+                                        duration: 0, // or default duration
+                                        velocity: note.velocity
+                                    });
+                                }
+
+                                for (const note of sustainBuffer) {
+                                    pairedNotes.push({
+                                        startTicks: note.startTicks,
+                                        pitch: note.pitch,
+                                        duration: note.originalEndTicks - note.startTicks, // fallback if pedal never released
+                                        velocity: note.velocity
+                                    });
+                                }
+
+                                if (pairedNotes.length !== 0) {
+
+                                    const newTrack = addTrack(instruments.value[10], null, trackName);
+
+                                    //console.log(pairedNotes);
+
+                                    for (const note of pairedNotes) {
+
+                                        const notePitch = note.pitch - 12;
+                                        const noteOctave = Math.floor(notePitch / 12);
+                                        const noteName = noteNames[notePitch % 12];
+                                        const noteLength = Math.round(note.duration / ticksPerBeat * 64) / 64; // in beats
+                                        const noteWidth = Math.round(note.duration / ticksPerBeat * 64 / 4) * 4 - 1;
+                                        const noteLeft = Math.round(note.startTicks / ticksPerBeat * 64 / 4) * 4; // t * b/t * 64px/b = px (1/4 note at 120 bpm (default) is 64 px wide)
+                                        const noteVolume = Math.floor(note.velocity/8);
+
+                                        const newNote = {
+                                            left: noteLeft, // In pixels
+                                            top: 2568 - notePitch * gridHeight, // In pixels, the top of the note
+                                            width: noteWidth, // In pixels (we assume 4/4 time, which is 16 pixels per beat)
+                                            highlighted: false,
+                                            color: newTrack.color,
+                                            id: notesInGrid.value.length + Date.now(),
+                                            name: noteName + noteOctave, 
+                                            pitch: notePitch + 12,
+                                            length: noteLength, // In beats
+                                            start: noteLeft / 16, // In beats
+                                            end: noteLeft / 16 + noteLength, // In beats
+                                            volume: noteVolume,
+                                            track: newTrack
+                                        };
+
+                                        notesInGrid.value.push(newNote);
+                                        newNote.track.notes.unshift(newNote);
+                                    }
+                                }
+
+                            });
+
+                            tempo.value = Math.round(fileTempo);
+                            
+                            const tempoMarkersTemp = [];
+                            let previousTempo = fileTempo;
+
+                            let idx = 0;
+                            for (const tempo of parsedMIDI.tempoChanges) {
+                                idx++;
+                                if (Math.round(tempo.tempo) === previousTempo || tempo.ticks === 0 && idx === parsedMIDI.tempoChanges.length) {
+                                    continue;
+                                }
+                                let marker = {
+                                    left: Math.round(tempo.ticks / ticksPerBeat * 16) * 4,
+                                    tempo: Math.round(tempo.tempo),
+                                    color: tracks.value[0].color,
+                                    parentTrack: tracks.value[0],
+                                    muted: false
+                                };
+                                tempoMarkersTemp.push(marker);
+                                previousTempo = Math.round(tempo.tempo);
+                            }
+
+                            tempoMarkers.value = [...tempoMarkers.value, ...tempoMarkersTemp];
+
+                        } catch (err) {
+                            console.error('Error parsing MIDI file:', err);
+                        }
+                    };
+
+                    reader.readAsArrayBuffer(file);
+                }
+            };
+
+            hiddenFileInput.addEventListener('change', handleFileSelect);
+        }
+
+
         async function parseMMLFromClipboard() {
             const textFromClipboard = await navigator.clipboard.readText();
             parseMML(textFromClipboard);
@@ -2227,7 +2448,8 @@ export default {
             windowWidth,
             scrollX,
             gridWrapper,
-            tryRemoveNote
+            tryRemoveNote,
+            importMidi
         };
     }
 };
