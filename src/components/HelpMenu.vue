@@ -16,7 +16,7 @@
             <button class="close-button" @click="closeHelp">X</button>
             <div class="help-content">
               <h1>Help</h1>
-              <p class="credits">MOS v1.1</p>
+              <p class="credits">MOS v1.2</p>
 
               <h3>Navigating the Grid</h3>
               <ul>
@@ -81,6 +81,8 @@
                 <li>To add a track, click on the blue plus button to the right of the tracks.</li>
                 <li>To rename a track, double click on the track's name. When done with renaming, press <strong>Enter</strong>.</li>
                 <li>To mute/unmute a track, click on the volume icon next to the track's name.</li>
+                <li>To focus on a track, right click on the volume icon. This will mute all other tracks.</li>
+                <li>To unfocus, right click on the volume icon again. This will unmute all other tracks.</li>
                 <li>Clicking on a note from another track will cause you to switch to that note's track.</li>
                 <li>You can remove a track by clicking on the <strong>X</strong>. This will also remove the notes belonging to that track.</li>
                 <li>To change the color of a track and its notes, click on the outlined box at the bottom-center of the selected track's tab.</li>
@@ -224,13 +226,14 @@
   }
   
   .close-button {
-    position: absolute;
+    position: sticky;
     top: 10px;
     right: 10px;
     background-color: transparent;
     border: none;
     font-size: 20px;
     cursor: pointer;
+    float: right;
   }
   
   .fade-enter-active, .fade-leave-active {

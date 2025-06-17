@@ -24,7 +24,7 @@
             >
               {{ track.name }}
             </span>
-            <span class="mute-icon" @click.stop="toggleMute(index)">
+            <span class="mute-icon" @mousedown="toggleMute($event, index)" @contextmenu="$event.preventDefault()">
               {{ track.isMuted ? '🔇' : '🔊' }}
             </span>
             <button @click.stop="removeTrack(index)" class="delete-btn">✖</button>
@@ -66,6 +66,8 @@
     setup(props, { emit }) {
       const containerWidth = ref(0);
       const tabContainerRef = ref(null);
+
+      let focusedTrack = null;
   
   
       const canAddTrack = computed(() => {
@@ -165,18 +167,38 @@
         emit('track-selected', tracks.value[index]);
       };
   
-      const toggleMute = (index) => {
-        tracks.value[index].isMuted = !tracks.value[index].isMuted;
-        if (tracks.value[index].isMuted)
-          for (const note of tracks.value[index].notes) {
-            note.muted = true;
+      const toggleMute = (event, index) => {
+        event.preventDefault();
+        if (event.button === 0) {
+          tracks.value[index].isMuted = !tracks.value[index].isMuted;
+          if (tracks.value[index].isMuted)
+            for (const note of tracks.value[index].notes) {
+              note.muted = true;
+            }
+          else {
+            for (const note of tracks.value[index].notes) {
+              note.muted = false;
+            }
           }
-        else {
+          emit('mute-track', index);
+        } else if (event.button === 2) {
+          focusedTrack = tracks.value[index] === focusedTrack ? null : tracks.value[index];
+          const doMute = focusedTrack !== null
+          tracks.value[index].isMuted = false;
           for (const note of tracks.value[index].notes) {
             note.muted = false;
           }
+          for (const [idx, track] of tracks.value.entries()) {
+            if (track === tracks.value[index])
+              continue;
+            track.isMuted = doMute;
+            for (const note of track.notes) {
+              note.muted = doMute;
+            }
+            emit('mute-track', idx);
+          }
+            emit('mute-track', index);
         }
-        emit('mute-track', index);
       };
   
       const updateTrackColor = (event) => {

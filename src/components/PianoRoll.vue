@@ -77,7 +77,8 @@
                         #bbb 2px,
                         #eee 2px,
                         #eee ${256*zoomScalar}px
-                    )`
+                    )`,
+                    float: 'bottom'
                 }">
                 <div
                     v-for="index in Math.ceil((gridSpan / 256))"
@@ -284,8 +285,22 @@ export default {
             const grid = gridWidth.value;
             const width = gridSpan.value * zoom;
             const height = 12 * 9 * gridHeight; // numKeys * keyHeight
+            const gridwidth = 256/grid;
 
             ctx.clearRect(0, 0, width, height);
+
+            // --- Draw Background Quarter Notes ---
+            const bgSpacing = 64 * zoom;
+            ctx.fillStyle = '#e0e0e0';
+            for (let i = 0; i <= width; i+=2*bgSpacing) {
+                const x = i - screenLeft;
+                ctx.fillRect(x, 0, bgSpacing, height);
+            }
+            ctx.fillStyle = '#ccc';
+            for (let i = bgSpacing; i <= width; i+=2*bgSpacing) {
+                const x = i - screenLeft;
+                ctx.fillRect(x, 0, bgSpacing, height);
+            }
 
             // --- Draw Horizontal Grid Lines ---
             ctx.strokeStyle = '#bbb';
@@ -306,7 +321,6 @@ export default {
                 ctx.strokeStyle = '#c0c0c0';
                 ctx.lineWidth = 2;
                 let verticalSpacing = 0;
-                let gridwidth = ((gridWidth.value)**(-1)*256);
                 if (zoom > 1/8 && zoom <= 1/2) {
                     verticalSpacing = gridwidth == 12 ? grid * 4 * zoom : grid * 8 * zoom;
                 } else if (zoom > 1/2 && zoom <= 7/8) {
@@ -447,7 +461,7 @@ export default {
         watch(notesInGrid, () => {
             drawCanvasGrid();
         }, { deep: true });
-
+        
         watch(gridSpan, async () => {
             await nextTick();
             drawCanvasGrid();
@@ -559,7 +573,7 @@ export default {
             }
             await nextTick();
             if (gridCanvas.value) {
-                ctx = gridCanvas.value.getContext('2d');
+                ctx = gridCanvas.value.getContext('2d', { alpha: false });
                 drawCanvasGrid();
             }
         });
@@ -1518,7 +1532,7 @@ export default {
             endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number));
 
             const existingNote = notesInGrid.value.find(note =>
-                note.left <= left && left <= note.left + note.width && note.top === top && !note.muted
+                note.left <= x && x <= note.left + note.width + 1 && note.top === top && !note.muted
             );
 
             if (!existingNote) {
@@ -1547,17 +1561,15 @@ export default {
                 //console.log('NOTE X,Y', newNote.left, newNote.top);
             } else {
                 // Here, we have identified that we clicked on an existing note.
-                // if we left click, do the below.
-                // if we click within the note-length handle, call the handle drag method
                 if (event.button === 0) {
-                    const resizeHandleWidth = Math.min(10, (existingNote.width + 1) * 0.4);
+                    const resizeHandleWidth = Math.min(10, (existingNote.width + 1) * 0.4) / zoomScalar.value;
                     const volumeHandleCenter = { x: existingNote.left + (existingNote.width + 1) / 2, y: existingNote.top + gridHeight };
-                    const squaredDistToCenter = (volumeHandleCenter.x - x) ** 2 + (volumeHandleCenter.y - y) ** 2;
+                    const squaredDistToCenter = ((volumeHandleCenter.x - x) * zoomScalar.value) ** 2 + (volumeHandleCenter.y - y) ** 2;
                     const radius = Math.min(6, (existingNote.width + 1) / 4);
-                    if (x >= existingNote.left + existingNote.width + 1 - resizeHandleWidth && x <= existingNote.left + existingNote.width + 1) {
+                    console.log(existingNote.left + existingNote.width - resizeHandleWidth, x, existingNote.left + existingNote.width + 1);
+                    if (x >= existingNote.left + existingNote.width - resizeHandleWidth && x <= existingNote.left + existingNote.width + 1) {
                         startResize(existingNote, event);
                     } else if (squaredDistToCenter <= radius * radius) {
-                        // if we click within the note-volume handle, call the handle volume method or whatever it is
                         startVolumeChange(existingNote, event);
                     } else {
                         startDrag(existingNote, event);
@@ -1565,17 +1577,6 @@ export default {
                 } else if (event.button === 2) {
                     removeNote(existingNote, false);
                 }
-                // if we right click, delete the note
-                // otherwise, start drag
-
-                /*
-                @mousedown.left="startDrag(note, $event)"
-                @mouseup.left="endDrag"
-                @mousedown.right.prevent="removeNote(note, false, $event)"
-                @mouseover="removeNote(note, false, $event)">
-                <div class="resize-handle" @mousedown="startResize(note, $event)"></div>
-                <div class="volume-handle" @mousedown="startVolumeChange(note, $event)"></div>
-                */
             }
         };
 
@@ -1634,7 +1635,7 @@ export default {
                 }
             }
 
-            if (tracks.value.length + trackWrappers.length - 1 > 160) {
+            if (tracks.value.length + trackWrappers.length - 1 > 16) {
                 showFailureMessage('Failed to split track! (Process would create too many tracks!)');
                 return;
             }
@@ -2161,7 +2162,7 @@ export default {
                             const parsedMIDI = new MIDI(arrayBuffer);
                             await parsedMIDI.isReady;
 
-                            console.log(parsedMIDI);
+                            //console.log(parsedMIDI);
 
                             const ticksPerBeat = parsedMIDI.timeDivision;
                             const fileDuration = parsedMIDI.duration;
@@ -2569,10 +2570,8 @@ export default {
 }
 
 .ruler {
-    position: fixed;
-    top: 0;
+    position: absolute;
     left: 0;
-    margin-top: 90px;
     margin-left: calc(10% - 2px);
     background-color: #eee;
     height: 29px;
@@ -2584,24 +2583,6 @@ export default {
     z-index: 11;
     user-select: none;
     cursor: pointer;
-}
-
-@media (max-width: 1162px) {
-    .ruler {
-        margin-top: 108px;
-    }
-}
-
-@media (max-width: 701px) {
-    .ruler {
-        margin-top: 124px;
-    }
-}
-
-@media (max-width: 625px) {
-    .ruler {
-        margin-top: 142px;
-    }
 }
 
 .ruler-tick-label {
