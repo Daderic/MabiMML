@@ -1365,7 +1365,7 @@ export default {
             document.removeEventListener('mouseup', endResize);
         };
 
-        let startingNoteVolume = 0;
+        let startingNoteVolumes = [];
 
         const startVolumeChange = (note, event) => {
             event.preventDefault();
@@ -1381,7 +1381,7 @@ export default {
                     clearSelection();
                     volumeChangingNotes.value = [note];
                 }
-                startingNoteVolume = note.volume;
+                startingNoteVolumes = volumeChangingNotes.value.map((note) => {return note.volume});
 
                 document.addEventListener('mousemove', onVolumeChange);
                 document.addEventListener('mouseup', endVolumeChange);
@@ -1391,11 +1391,13 @@ export default {
         const onVolumeChange = (event) => {
             event.preventDefault();
             if (volumeChangingNotes.value.length > 0) {
+                let i = 0;
                 for (const note of volumeChangingNotes.value) {
                     const dy = startY.value - event.clientY;
-                    let newVolume = Math.round(Math.max(1, Math.min(15, startingNoteVolume + dy/10)));
+                    let newVolume = Math.round(Math.max(1, Math.min(15, startingNoteVolumes[i] + dy/10)));
                     note.volume = newVolume;
                     currentNoteVolume.value = newVolume;
+                    i++;
                 }
             }
         };
@@ -1565,8 +1567,7 @@ export default {
                     const resizeHandleWidth = Math.min(10, (existingNote.width + 1) * 0.4) / zoomScalar.value;
                     const volumeHandleCenter = { x: existingNote.left + (existingNote.width + 1) / 2, y: existingNote.top + gridHeight };
                     const squaredDistToCenter = ((volumeHandleCenter.x - x) * zoomScalar.value) ** 2 + (volumeHandleCenter.y - y) ** 2;
-                    const radius = Math.min(6, (existingNote.width + 1) / 4);
-                    console.log(existingNote.left + existingNote.width - resizeHandleWidth, x, existingNote.left + existingNote.width + 1);
+                    const radius = Math.min(6, ((existingNote.width + 1) / 4) * zoomScalar.value);
                     if (x >= existingNote.left + existingNote.width - resizeHandleWidth && x <= existingNote.left + existingNote.width + 1) {
                         startResize(existingNote, event);
                     } else if (squaredDistToCenter <= radius * radius) {
@@ -1970,7 +1971,7 @@ export default {
                         length = tokenLength;
                     }
                 } else if (token.type === 'TIE') {
-                    if (previousNote === null)
+                    if (previousNote === null || newTokenList[i + 1] == null)
                         continue;
                     // if the next note has the same pitch as the previous note, then we modify the duration of previous note and increment builderX and i
                     let nextNote = newTokenList[i + 1];
