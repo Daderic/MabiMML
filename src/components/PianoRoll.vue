@@ -3,12 +3,13 @@
         <button class="play-button" @click="playSequence">Play Sequence</button>
         <label class="loop-wrapper">
             Loop:
-            <input type="checkbox" v-model="loopSong"/>
+            <input type="checkbox" v-model="loopSong" />
         </label>
         <label class="scroll-wrapper">
             Auto-scroll:
-            <input type="checkbox" v-model="autoScrollSong"/>
+            <input type="checkbox" v-model="autoScrollSong" />
         </label>
+        <ExportMenu />
         <HelpMenu />
         <div v-if="showSuccessNotification" class="copyNotification">
             {{ successNotificationText }}
@@ -16,12 +17,13 @@
         <div v-if="showFailedNotification" class="copyNotification" style="background-color: #d44;">
             {{ failedNotificationText }}
         </div>
-        
-        <Tracks @track-selected="handleTrackSelected" @add-track="handleAddTrack" @remove-track="handleRemoveTrack" @mute-track="handleMuteTrack" @color-change="updateColor" />
+
+        <Tracks @track-selected="handleTrackSelected" @add-track="handleAddTrack" @remove-track="handleRemoveTrack"
+            @mute-track="handleMuteTrack" @color-change="updateColor" />
         <div class="controls">
             <div class="instrument-selector">
                 <label for="instrument-select">Select Instrument: </label>
-                <select id="instrument-select" v-model="selectedInstrument" @change="changeInstrument">
+                <select id="instrument-select" v-model="selectedInstrument" @change="changeInstrument(false)">
                     <option v-for="(instrument, index) in instruments" :key="index" :value="instrument">
                         {{ instrument.name }}
                     </option>
@@ -32,14 +34,16 @@
                 <input type="number" id="tempo-select" v-model.number="tempo" min="40" max="240">
             </div>
             <button class="track-splitter" @click="trackify">Split Track</button>
-            <button class="MML-converter" @click="genMML" style="margin-left: 10px;">Gen MML</button>
+            <!--<button class="MML-converter" @click="genMML" style="margin-left: 10px;">Gen MML</button>-->
             <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
             <button @click="importMidi" style="margin-left: 10px;">Import MIDI</button>
             <input type="file" id="hiddenFileInput" style="display: none" accept=".mid,.midi" />
             <div class="grid-division-selector">
                 <label for="grid-select" style="padding-left: 10px">Grid Spacing: </label>
                 <select id="grid-select" v-model="gridWidth">
-                    <option v-for="(value) in [{displayName: '16ths', width: 256/16}, {displayName: '12ths', width: 256/12}]" :key="value.displayName" :value="value.width">
+                    <option
+                        v-for="(value) in [{ displayName: '16ths', width: 256 / 16 }, { displayName: '12ths', width: 256 / 12 }]"
+                        :key="value.displayName" :value="value.width">
                         {{ value.displayName }}
                     </option>
                 </select>
@@ -54,84 +58,49 @@
                         <!-- Keys should be in reverse order to have higher notes at the top -->
                         <div v-for="(note, index) in notes.slice().reverse()" :key="note.name"
                             :class="['piano-key', note.isBlack ? 'black-key' : 'white-key']"
-                            @mousedown="startNote(0, note, octave)"
-                            @mouseover="mouseOverNote(0, note, octave)"
-                            @mouseup="endNote(0, note, octave)"
-                            @mouseleave="mouseLeaveNote(0, note, octave)"
-                            :style="{
+                            @mousedown="startNote(0, note, octave)" @mouseover="mouseOverNote(0, note, octave)"
+                            @mouseup="endNote(0, note, octave)" @mouseleave="mouseLeaveNote(0, note, octave)" :style="{
                                 zIndex: note.isBlack ? 1 : 0,
-                                background: note.index + 12*octave < instrKeyMin || note.index + 12*octave > instrKeyMax ? '#d44' : (note.isBlack ? '#000' : '#fff')
-                                }">
+                                background: note.index + 12 * octave < instrKeyMin || note.index + 12 * octave > instrKeyMax ? '#d44' : (note.isBlack ? '#000' : '#fff')
+                            }">
                             {{ note.name + octave }}
                         </div>
                     </div>
                 </div>
             </div>
-            <div class="ruler" ref="ruler" 
-                @mousedown="handleRulerClick"
-                :style="{
-                    width: 'calc( 10% + ' + gridSpan*zoomScalar + 'px )',
-                    background: `repeating-linear-gradient(
+            <div class="ruler" ref="ruler" @mousedown="handleRulerClick" :style="{
+                width: 'calc( 10% + ' + gridSpan * zoomScalar + 'px )',
+                background: `repeating-linear-gradient(
                         90deg,
                         #bbb,
                         #bbb 2px,
                         #eee 2px,
-                        #eee ${256*zoomScalar}px
+                        #eee ${256 * zoomScalar}px
                     )`,
-                    float: 'bottom'
-                }">
-                <div
-                    v-for="index in Math.ceil((gridSpan / 256))"
-                    :key="index"
-                    class="ruler-tick-label"
-                    :style="{ left: `calc(${(index - 1) * 256*zoomScalar}px)` }"
-                    >
+                float: 'bottom'
+            }">
+                <div v-for="index in Math.ceil((gridSpan / 256))" :key="index" class="ruler-tick-label"
+                    :style="{ left: `calc(${(index - 1) * 256 * zoomScalar}px)` }">
                     {{ index }}
                 </div>
-                <div class="marker-replay-triangle" :style="{ left: markerReplayPosition*zoomScalar + 'px' }"></div>
-                <div class="marker-wrapper" :style="{ left: markerPosition*zoomScalar + 'px' }">
+                <div class="marker-replay-triangle" :style="{ left: markerReplayPosition * zoomScalar + 'px' }"></div>
+                <div class="marker-wrapper" :style="{ left: markerPosition * zoomScalar + 'px' }">
                     <div class="marker-triangle"></div>
                     <div class="marker-line"></div>
                 </div>
 
-                <TempoMarker 
-                    v-for="(tempoMarker, index) in tempoMarkers"
-                    :key="tempoMarker.left"
-                    :left="(tempoMarker.left)*zoomScalar+1"
-                    :tempo="tempoMarker.tempo"
-                    :index="index"
-                    :color="tempoMarker.color"
-                    :visible="tempoMarker.muted ? 'hidden' : 'visible'"
-                    @click="clickTempoMarker"
-                />
+                <TempoMarker v-for="(tempoMarker, index) in tempoMarkers" :key="tempoMarker.left"
+                    :left="(tempoMarker.left) * zoomScalar + 1" :tempo="tempoMarker.tempo" :index="index"
+                    :color="tempoMarker.color" :visible="tempoMarker.muted ? 'hidden' : 'visible'"
+                    @click="clickTempoMarker" @click.stop />
 
             </div>
             <div class="grid-wrapper">
-                <!-- <div class="grid" ref="grid" :style="{ width: gridSpan*zoomScalar + 'px', background: backgroundStyle.background }" @mousedown.left="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll">
-                    <div v-for="note in notesInGrid" :key="note.id" class="note"
-                        :style="{
-                            left: note.left*zoomScalar + 'px',
-                            top: (note.top + 1) + 'px',
-                            width: (note.width + 1) * zoomScalar - 1 + 'px',
-                            height: gridHeight + 'px',
-                            visibility: note.muted ? 'hidden' : 'visible',
-                            pointerEvents: note.muted ? 'none' : 'auto',
-                            backgroundColor: hexToRgba(note.color, (note.volume+1)/15),//note.highlighted ? 'rgba(255, 0, 0, 0.5)' : 'rgba(0, 120, 255, 0.5)'
-                            border: `${note.highlighted ? 2 : 1}px solid ${note.highlighted ? 'white' : note.color}`,
-                        }"
-                        @mousedown.left="startDrag(note, $event)"
-                        @mouseup.left="endDrag"
-                        @mousedown.right.prevent="removeNote(note, false, $event)"
-                        @mouseover="removeNote(note, false, $event)">
-                        <div class="resize-handle" @mousedown="startResize(note, $event)"></div>
-                        <div class="volume-handle" @mousedown="startVolumeChange(note, $event)"></div>
-                        {{ note.name + `(${note.volume})` }}
-                    </div>
-                    <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
-                </div> -->
-                <div class="grid" ref="grid" :style="{width: gridSpan * zoomScalar + 'px', height: 2622 + 'px'}">
-                    <div :style="{width: scrollX + 'px'}" />
-                    <canvas class="gridCanvas" ref="gridCanvas" :width="windowWidth*0.9 - 14" :height="2592" @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent="startNoteRemove" @wheel="handleGridScroll" />
+                <div class="grid" ref="grid" :style="{ width: gridSpan * zoomScalar + 'px', height: 2622 + 'px' }">
+                    <div :style="{ width: scrollX + 'px' }" />
+                    <canvas class="gridCanvas" ref="gridCanvas" :width="windowWidth * 0.9 - 14" :height="2592"
+                        @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent="startNoteRemove"
+                        @wheel="handleGridScroll" />
                     <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
                 </div>
             </div>
@@ -147,11 +116,12 @@ import Tracks from '@/components/Tracks.vue'
 import { selectedTrack, tracks, selectedTrackIndex, trackHexColor, EventBus } from '@/components/Tracks.vue'
 import { _ } from 'core-js';
 import TempoMarker from './TempoMarker.vue';
+import ExportMenu from './ExportMenu.vue';
 
 export default {
     name: 'PianoRoll',
     components: {
-        HelpMenu, Tracks, TempoMarker
+        HelpMenu, Tracks, TempoMarker, ExportMenu
     },
     setup() {
         const root = process.env.NODE_ENV === 'production' ? '../MabiMML/' : '../';
@@ -204,7 +174,7 @@ export default {
 
         let currentNoteLength = ref(16);
         let currentNoteVolume = ref(8);
-        const gridWidth = ref(256/16); // This makes the base size an x-th note
+        const gridWidth = ref(256 / 16); // This makes the base size an x-th note
         const gridHeight = 24;
         const notesInGrid = ref([]);
         const draggingNotes = ref([]);
@@ -268,9 +238,9 @@ export default {
             repeating-linear-gradient(/*This is the background colors*/
                 90deg,
                 #e0e0e0,
-                #e0e0e0 ${64*zoomScalar.value}px,
-                #ccc ${64*zoomScalar.value}px,
-                #ccc ${128*zoomScalar.value}px
+                #e0e0e0 ${64 * zoomScalar.value}px,
+                #ccc ${64 * zoomScalar.value}px,
+                #ccc ${128 * zoomScalar.value}px
             )`
         }));
 
@@ -285,19 +255,19 @@ export default {
             const grid = gridWidth.value;
             const width = gridSpan.value * zoom;
             const height = 12 * 9 * gridHeight; // numKeys * keyHeight
-            const gridwidth = 256/grid;
+            const gridwidth = 256 / grid;
 
             ctx.clearRect(0, 0, width, height);
 
             // --- Draw Background Quarter Notes ---
             const bgSpacing = 64 * zoom;
             ctx.fillStyle = '#e0e0e0';
-            for (let i = 0; i <= width; i+=2*bgSpacing) {
+            for (let i = 0; i <= width; i += 2 * bgSpacing) {
                 const x = i - screenLeft;
                 ctx.fillRect(x, 0, bgSpacing, height);
             }
             ctx.fillStyle = '#ccc';
-            for (let i = bgSpacing; i <= width; i+=2*bgSpacing) {
+            for (let i = bgSpacing; i <= width; i += 2 * bgSpacing) {
                 const x = i - screenLeft;
                 ctx.fillRect(x, 0, bgSpacing, height);
             }
@@ -315,17 +285,17 @@ export default {
             }
             ctx.stroke();
 
-            if (zoom > 1/8) {
+            if (zoom > 1 / 8) {
 
                 // --- Vertical Subdivisions ---
                 ctx.strokeStyle = '#c0c0c0';
                 ctx.lineWidth = 2;
                 let verticalSpacing = 0;
-                if (zoom > 1/8 && zoom <= 1/2) {
+                if (zoom > 1 / 8 && zoom <= 1 / 2) {
                     verticalSpacing = gridwidth == 12 ? grid * 4 * zoom : grid * 8 * zoom;
-                } else if (zoom > 1/2 && zoom <= 7/8) {
+                } else if (zoom > 1 / 2 && zoom <= 7 / 8) {
                     verticalSpacing = grid * 4 * zoom;
-                } else if (zoom > 7/8 && zoom < 2.5) {
+                } else if (zoom > 7 / 8 && zoom < 2.5) {
                     verticalSpacing = grid * 2 * zoom;
                 } else if (zoom >= 2.5) {
                     verticalSpacing = grid * zoom;
@@ -452,7 +422,7 @@ export default {
 
         watchEffect(() => {
             const maxRightPosition = Math.max(...notesInGrid.value.map(note => note.left + note.width), 0);
-            gridSpan.value = Math.max((maxRightPosition + window.innerWidth/zoomScalar.value), window.innerWidth/zoomScalar.value);
+            gridSpan.value = Math.max((maxRightPosition + window.innerWidth / zoomScalar.value), window.innerWidth / zoomScalar.value);
             windowWidth.value = window.innerWidth;
             if (document.querySelector('.grid-wrapper'))
                 scrollX.value = gridWrapper.value.scrollLeft;
@@ -461,7 +431,7 @@ export default {
         watch(notesInGrid, () => {
             drawCanvasGrid();
         }, { deep: true });
-        
+
         watch(gridSpan, async () => {
             await nextTick();
             drawCanvasGrid();
@@ -480,7 +450,7 @@ export default {
             //console.log(track);
             selectedInstrument.value = track.instrument;
             selectedTrackIndex.value = tracks.value.indexOf(track);
-            changeInstrument();
+            changeInstrument(true);
         };
 
         const handleAddTrack = async (newTrack, index) => {
@@ -547,7 +517,7 @@ export default {
         onMounted(async () => {
             try {
                 windowWidth.value = window.innerWidth;
-                
+
                 const gridWrapperVar = document.querySelector('.grid-wrapper');
                 if (gridWrapperVar) {
                     gridWrapper.value = gridWrapperVar;
@@ -563,7 +533,7 @@ export default {
                 await context.value.audioWorklet.addModule(root + "worklet_processor.min.js");
                 const soundFontArrayBuffer = await loadSoundFont();
                 if (!soundFontArrayBuffer) return;
-                synth.value = new Synthetizer(context.value.destination, soundFontArrayBuffer, true, undefined, {chorusEnabled: false, reverbEnabled: false});
+                synth.value = new Synthetizer(context.value.destination, soundFontArrayBuffer, true, undefined, { chorusEnabled: false, reverbEnabled: false });
                 synth.value.setMainVolume(2);
                 synth.value.setLogLevel(false, false, false, false);
                 await synth.value.isReady;
@@ -578,7 +548,7 @@ export default {
             }
         });
 
-        
+
 
         onBeforeUnmount(() => {
             window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -595,9 +565,9 @@ export default {
         };
 
         const placeTempoMarker = (event) => {
-            const granularity = event.altKey ? gridWidth.value/4 : gridWidth.value;
+            const granularity = event.altKey ? gridWidth.value / 4 : gridWidth.value;
             const left = Math.round((event.clientX - ruler.value.getBoundingClientRect().left) / granularity / zoomScalar.value) * granularity;
-            const enteredTempo = prompt("Enter tempo (BPM):", "120");
+            const enteredTempo = prompt("Enter tempo (BPM):", tempo.value);
             //console.log(enteredTempo);
             if (enteredTempo !== null && !isNaN(enteredTempo) && enteredTempo !== '') {
                 tempoMarkers.value.push({
@@ -613,15 +583,18 @@ export default {
         const clickTempoMarker = (event, index) => {
             event.preventDefault();
             //console.log(event);
-            if (event.button !== 0)
-                return;
-            const enteredTempo = prompt("Enter tempo (BPM):", "120");
-            if (enteredTempo === null)
-                return;
-            if (!isNaN(enteredTempo) && enteredTempo !== '') {
-                tempoMarkers.value[index].tempo = Number(enteredTempo);
-            } else {
-                tempoMarkers.value.splice(index, 1);
+            if (event.button === 0) {
+                const enteredTempo = prompt("Enter tempo (BPM):", tempoMarkers.value[index].tempo);
+                if (enteredTempo === null)
+                    return;
+                if (!isNaN(enteredTempo) && enteredTempo !== '') {
+                    tempoMarkers.value[index].tempo = Number(enteredTempo);
+                } else {
+                    tempoMarkers.value.splice(index, 1);
+                }
+            } else if (event.button === 2) {
+                tempoMarkers.value[index].parentTrack = selectedTrack.value;
+                tempoMarkers.value[index].color = selectedTrack.value.color;
             }
         };
 
@@ -652,7 +625,7 @@ export default {
             isPlaying.value = true;
             markerStartPos = markerPosition.value;
             startTempo = tempo.value;
-            tempoMarkers.value.sort((a, b) => {a.left - b.left});
+            tempoMarkers.value.sort((a, b) => { a.left - b.left });
             doMarkerAnim();
         }
 
@@ -709,20 +682,20 @@ export default {
             let mmlWidth = width;
             let noteLengths = [];
             for (let i = 1; i <= 64; ++i) {
-              if (i < 12 || i % 12 === 0 || i % 16 === 0) {
+                if (i < 12 || i % 12 === 0 || i % 16 === 0) {
 
-                  let val1 = Math.round(256 / i * 100);
-                  let val2 = Math.round(256 / i * 150);
-                
-                  noteLengths.push({
-                      length: val2,
-                      name: 'L' + i + '.'
-                  });
-                  noteLengths.push({
-                      length: val1,
-                      name: 'L' + i
-                  });
-              }
+                    let val1 = Math.round(256 / i * 100);
+                    let val2 = Math.round(256 / i * 150);
+
+                    noteLengths.push({
+                        length: val2,
+                        name: 'L' + i + '.'
+                    });
+                    noteLengths.push({
+                        length: val1,
+                        name: 'L' + i
+                    });
+                }
             }
             let result = getClosestWidth(noteLengths, mmlWidth);
             outString = result.noteCombination.map(note => note.name).join('&');
@@ -735,7 +708,7 @@ export default {
             const dp = new Array(amount + 1).fill(Infinity);
             dp[0] = 0;
 
-            const usedNotes = new Array(amount + 1).fill(-1);   
+            const usedNotes = new Array(amount + 1).fill(-1);
 
             for (let i = 1; i <= amount; i++) {
                 for (const note of notes) {
@@ -748,7 +721,7 @@ export default {
             }
 
             if (dp[amount] === Infinity) {
-                return { minNotes: null, noteCombination: []};
+                return { minNotes: null, noteCombination: [] };
             }
 
             const result = []
@@ -771,8 +744,8 @@ export default {
         const updateMarkerPos = (clientX, altKey, fromClick) => {
             if (ruler.value) {
                 const rulerRect = ruler.value.getBoundingClientRect();
-                let newPos = Math.round((clientX - rulerRect.left)/zoomScalar.value / (gridWidth.value/4)) * (gridWidth.value/4);
-                let gridSnap = gridWidth.value * (zoomScalar.value <= 0.5 ? 64/gridWidth.value : 1);
+                let newPos = Math.round((clientX - rulerRect.left) / zoomScalar.value / (gridWidth.value / 4)) * (gridWidth.value / 4);
+                let gridSnap = gridWidth.value * (zoomScalar.value <= 0.5 ? 64 / gridWidth.value : 1);
 
                 if (!altKey) {
                     newPos = Math.round(newPos / (gridSnap)) * gridSnap;
@@ -795,7 +768,7 @@ export default {
                 for (const note of selectedNotes.value) {
                     removeNote(note, true);
                 }
-                
+
                 if (isPlaying.value)
                     playSequence();
             }
@@ -814,7 +787,7 @@ export default {
                 for (const note of notesInGrid.value) {
                     selectNote(note);
                 }
-                
+
                 showSuccessMessage(`Selected ${selectedNotes.value.length} notes!`, 1000);
             } else if (event.key === 'ArrowUp') {
                 if (event.ctrlKey || event.shiftKey) {
@@ -825,7 +798,7 @@ export default {
                     }
                     for (const note of selectedNotes.value) {
                         note.top -= gridHeight * movementValue
-                        const number = (1284-(note.top/2))/144;
+                        const number = (1284 - (note.top / 2)) / 144;
                         const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
@@ -840,7 +813,7 @@ export default {
                     }
                     for (const note of selectedNotes.value) {
                         note.top += gridHeight * movementValue
-                        const number = (1284-(note.top/2))/144;
+                        const number = (1284 - (note.top / 2)) / 144;
                         const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
@@ -851,10 +824,10 @@ export default {
                     event.preventDefault();
                     let movementValue = event.ctrlKey ? 1 : 4;
                     for (const note of selectedNotes.value) {
-                        if (Math.round((note.left - gridWidth.value / movementValue)*1000)/1000 < 0) return;
+                        if (Math.round((note.left - gridWidth.value / movementValue) * 1000) / 1000 < 0) return;
                     }
                     for (const note of selectedNotes.value) {
-                        note.left = Math.round((note.left - gridWidth.value / movementValue)*1000)/1000;
+                        note.left = Math.round((note.left - gridWidth.value / movementValue) * 1000) / 1000;
                     }
                 }
             } else if (event.key === 'ArrowRight') {
@@ -862,7 +835,7 @@ export default {
                     event.preventDefault();
                     let movementValue = event.ctrlKey ? 1 : 4;
                     for (const note of selectedNotes.value) {
-                        note.left = Math.round((note.left + gridWidth.value / movementValue)*1000)/1000;
+                        note.left = Math.round((note.left + gridWidth.value / movementValue) * 1000) / 1000;
                     }
                 }
             } else if (event.key === 'c' && event.ctrlKey) {
@@ -970,7 +943,7 @@ export default {
                 const tempMidiBuilder = new MIDIBuilder("untitled", 480, tempo.value);
 
                 //midiBuilder.value.addEvent(0, 0, 0xC0, [selectedInstrument.value.program]);
-                
+
                 await context.value.resume();
                 if (!synth.value) return;
 
@@ -999,14 +972,14 @@ export default {
                         const channel = trackIndex;//trackIndex;
                         const pitch = note.pitch;
                         // Conversion from pixels to time.
-                        const noteStartTime = note.left/16*120;
-                        const noteDuration = (note.width+1)/16*120;
-                        const markerTime = markerPosition.value/16*120;
-                        const startTime = Math.max(noteStartTime, markerTime)-markerTime;
-                        const duration = Math.min(noteDuration, noteStartTime+noteDuration-markerTime);
+                        const noteStartTime = note.left / 16 * 120;
+                        const noteDuration = (note.width + 1) / 16 * 120;
+                        const markerTime = markerPosition.value / 16 * 120;
+                        const startTime = Math.max(noteStartTime, markerTime) - markerTime;
+                        const duration = Math.min(noteDuration, noteStartTime + noteDuration - markerTime);
                         const volume = Math.max(0, Math.min(127, (note.volume + 1) * 8 - 1));
 
-                        
+
 
                         tempMidiBuilder.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
                         tempMidiBuilder.addNoteOn(startTime, trackIndex, channel, pitch, volume);
@@ -1018,9 +991,9 @@ export default {
                 for (const tempoMarker of tempoMarkers.value) {
                     if (tempoMarker.parentTrack.isMuted)
                         continue;
-                    const tempoStartTime = tempoMarker.left/16*120;
-                    const markerTime = markerPosition.value/16*120;
-                    const tempoChangeTime = Math.max(tempoStartTime, markerTime)-markerTime;
+                    const tempoStartTime = tempoMarker.left / 16 * 120;
+                    const markerTime = markerPosition.value / 16 * 120;
+                    const tempoChangeTime = Math.max(tempoStartTime, markerTime) - markerTime;
                     tempMidiBuilder.addSetTempo(tempoChangeTime, tempoMarker.tempo);
                 }
 
@@ -1029,11 +1002,11 @@ export default {
                 }
 
                 tempMidiBuilder.flush();
-                
+
                 midiBuilder.value = tempMidiBuilder;
 
-                const b = await(writeMIDIFile(midiBuilder.value));
-                seq.value = new Sequencer([{binary: b}], synth.value);
+                const b = await (writeMIDIFile(midiBuilder.value));
+                seq.value = new Sequencer([{ binary: b }], synth.value);
                 seq.value.skipToFirstNoteOn = false;
                 seq.value.loop = loopSong.value && markerPosition.value === 0;
                 await synth.value.isReady;
@@ -1073,7 +1046,7 @@ export default {
             }
         };
 
-        const showSuccessMessage = (text, timeout=2000) => {
+        const showSuccessMessage = (text, timeout = 2000) => {
             successNotificationText.value = text;
             showSuccessNotification.value = true; // Show notification
 
@@ -1083,7 +1056,7 @@ export default {
             }, timeout);
         };
 
-        const showFailureMessage = (text, timeout=2000) => {
+        const showFailureMessage = (text, timeout = 2000) => {
             failedNotificationText.value = text;
             showFailedNotification.value = true; // Show notification
 
@@ -1105,15 +1078,15 @@ export default {
             }
         };
 
-        const changeInstrument = async () => {
+        const changeInstrument = async (fromTrack=false) => {
             if (synth.value && selectedInstrument.value) {
                 selectedTrack.value.instrument = selectedInstrument.value;
-                
+
                 instrKeyMin.value = selectedInstrument.value.min;
                 instrKeyMax.value = selectedInstrument.value.max;
 
                 synth.value.programChange(0, selectedInstrument.value.program);
-                if (isPlaying.value)
+                if (isPlaying.value && !fromTrack)
                     playSequence();
 
                 await synth.value.isReady;
@@ -1210,11 +1183,11 @@ export default {
                     const startPos = startPositions.get(note.id);
                     if (!startPos) continue;
 
-                    const dx = (event.clientX - startPos.x)/zoomScalar.value;
+                    const dx = (event.clientX - startPos.x) / zoomScalar.value;
                     const dy = event.clientY - startPos.y;
 
                     let newLeft = 0;
-                    
+
                     if (i === 0) {
                         newLeft = Math.round((startPos.left + dx) / noteSnapScale) * noteSnapScale;
                         noteDelta = newLeft - startPos.left;
@@ -1223,7 +1196,7 @@ export default {
                     }
 
                     let newTop = Math.round((startPos.top + dy) / gridHeight) * gridHeight;
-                    
+
                     if (newLeft < 0 || newTop < 0 || newTop > 2568) {
                         outOfBounds = true;
                         break; // Exit loop if any note is out of bounds
@@ -1246,11 +1219,11 @@ export default {
                     note.left = newLeft;
                     note.top = newTop;
 
-                    const number = (1284-(note.top/2))/144;
+                    const number = (1284 - (note.top / 2)) / 144;
                     const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
                     if (note.name != noteName && draggingNotes.value.length === 1) {
-                        startNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
-                        endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number))
+                        startNote(0, { name: noteName, index: number * 12 % 12 }, Math.floor(number))
+                        endNote(0, { name: noteName, index: number * 12 % 12 }, Math.floor(number))
                     }
                     note.name = noteName;
                     note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
@@ -1266,7 +1239,7 @@ export default {
 
                     // if (note.top > bottomMost)
                     //     bottomMost = note.top;
-                    
+
                 }
                 // const gridWrapper = document.querySelector('.grid-wrapper');
                 // const pianoRoll = document.querySelector('.piano-roll');
@@ -1313,7 +1286,7 @@ export default {
                     startResizeData.set(note.id, { width: note.width, startX: event.clientX });
                     resizingNotes.value = [note];
                 }
-                
+
                 document.addEventListener('mousemove', onResize);
                 document.addEventListener('mouseup', endResize);
             }
@@ -1329,10 +1302,10 @@ export default {
                     const startData = startResizeData.get(note.id);
                     if (!startData) return;
 
-                    const dx = (event.clientX - startData.startX)/zoomScalar.value;
+                    const dx = (event.clientX - startData.startX) / zoomScalar.value;
                     let newWidth = 0;
                     if (event.altKey) {
-                        newWidth = Math.round((startData.width + dx) / (gridWidth.value/4)) * gridWidth.value / 4 - 1;
+                        newWidth = Math.round((startData.width + dx) / (gridWidth.value / 4)) * gridWidth.value / 4 - 1;
                     } else {
                         newWidth = Math.round((startData.width + dx) / gridWidth.value) * gridWidth.value - 1;
                     }
@@ -1381,7 +1354,7 @@ export default {
                     clearSelection();
                     volumeChangingNotes.value = [note];
                 }
-                startingNoteVolumes = volumeChangingNotes.value.map((note) => {return note.volume});
+                startingNoteVolumes = volumeChangingNotes.value.map((note) => { return note.volume });
 
                 document.addEventListener('mousemove', onVolumeChange);
                 document.addEventListener('mouseup', endVolumeChange);
@@ -1394,14 +1367,14 @@ export default {
                 let i = 0;
                 for (const note of volumeChangingNotes.value) {
                     const dy = startY.value - event.clientY;
-                    let newVolume = Math.round(Math.max(1, Math.min(15, startingNoteVolumes[i] + dy/10)));
+                    let newVolume = Math.round(Math.max(1, Math.min(15, startingNoteVolumes[i] + dy / 10)));
                     note.volume = newVolume;
                     currentNoteVolume.value = newVolume;
                     i++;
                 }
             }
         };
-        
+
         const endVolumeChange = () => {
             volumeChangingNotes.value = [];
             if (isPlaying.value)
@@ -1422,15 +1395,15 @@ export default {
 
         const handleGridScroll = (event) => {
             // TODO: WE HAVE TO MAINTAIN A CONSTANT SIZED CANVAS. THE EXPANSION OF THE CANVAS CAUSES MUCHO LAG
-            const deltaY = -Math.sign(event.deltaY)*1/8;
+            const deltaY = -Math.sign(event.deltaY) * 1 / 8;
             if (event.ctrlKey) {
                 event.preventDefault();
                 const z1 = zoomScalar.value;
                 const l = gridWrapper.value.scrollLeft;
                 const x = (event.clientX - gridWrapper.value.getBoundingClientRect().left + l);
-                zoomScalar.value = Math.min(8, Math.max(1/8, Math.round((zoomScalar.value+deltaY)*8)/8)); // Making sure that the zoom is in multiples of 1/8th
+                zoomScalar.value = Math.min(8, Math.max(1 / 8, Math.round((zoomScalar.value + deltaY) * 8) / 8)); // Making sure that the zoom is in multiples of 1/8th
                 const z2 = zoomScalar.value;
-                gridWrapper.value.scrollLeft += x*(z2/z1 - 1);
+                gridWrapper.value.scrollLeft += x * (z2 / z1 - 1);
             }
             //console.log(gridCanvas.value.width);
         }
@@ -1476,9 +1449,9 @@ export default {
 
         function checkIntersections() {
             const selectionRect = {
-                left: Math.min(startX.value, currentX.value)/zoomScalar.value,
+                left: Math.min(startX.value, currentX.value) / zoomScalar.value,
                 top: Math.min(startY.value, currentY.value),
-                right: Math.max(startX.value, currentX.value)/zoomScalar.value,
+                right: Math.max(startX.value, currentX.value) / zoomScalar.value,
                 bottom: Math.max(startY.value, currentY.value),
             };
 
@@ -1488,7 +1461,7 @@ export default {
                     top: note.top,
                     right: note.left + note.width,
                     bottom: note.top + gridHeight,
-                };   
+                };
 
                 if (intersects(selectionRect, itemRect)) {
                     //console.log(note.name + ' intersects with selection.');
@@ -1507,9 +1480,9 @@ export default {
 
         function intersects(rect1, rect2) {
             return !(rect2.left >= rect1.right ||
-                    rect2.right <= rect1.left ||
-                    rect2.top >= rect1.bottom ||
-                    rect2.bottom <= rect1.top);
+                rect2.right <= rect1.left ||
+                rect2.top >= rect1.bottom ||
+                rect2.bottom <= rect1.top);
         }
 
 
@@ -1524,14 +1497,14 @@ export default {
 
             let left = Math.round((x - gridWidth.value / 2) / gridWidth.value) * gridWidth.value;
             if (event.altKey)
-                left = Math.round((x - gridWidth.value / 8) / (gridWidth.value/4)) * gridWidth.value/4;
+                left = Math.round((x - gridWidth.value / 8) / (gridWidth.value / 4)) * gridWidth.value / 4;
 
             const top = Math.round((y - gridHeight / 2) / gridHeight) * gridHeight;
 
-            const number = (1284-(top/2))/144;
+            const number = (1284 - (top / 2)) / 144;
             const noteName = noteNames[number * 12 % 12] + "" + Math.floor(number);
-            startNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number));
-            endNote(0, {name: noteName, index: number * 12 % 12}, Math.floor(number));
+            startNote(0, { name: noteName, index: number * 12 % 12 }, Math.floor(number));
+            endNote(0, { name: noteName, index: number * 12 % 12 }, Math.floor(number));
 
             const existingNote = notesInGrid.value.find(note =>
                 note.left <= x && x <= note.left + note.width + 1 && note.top === top && !note.muted
@@ -1628,7 +1601,7 @@ export default {
                         if (trackWrapper.index === trackWrappers.length - 1) {
                             trackWrappers.push({
                                 notes: [],
-                                track: {instrument: trackWrapper.track.instrument, color: null, name: selectedTrack.value.name + ` (${trackWrappers.length})`},
+                                track: { instrument: trackWrapper.track.instrument, color: null, name: selectedTrack.value.name + ` (${trackWrappers.length})` },
                                 index: trackWrappers.length
                             });
                         }
@@ -1672,16 +1645,16 @@ export default {
 
         function copyToClipboard(text) {
             navigator.clipboard.writeText(text).then(() => {
-                    successNotificationText.value = "MML copied to clipboard!";
-                    showSuccessNotification.value = true; // Show notification
+                successNotificationText.value = "MML copied to clipboard!";
+                showSuccessNotification.value = true; // Show notification
 
-                    // Hide notification after 2 seconds
-                    setTimeout(() => {
-                        showSuccessNotification.value = false;
-                    }, 2000);
-                }).catch(err => {
-                    console.error('Could not copy text: ', err);
-                });
+                // Hide notification after 2 seconds
+                setTimeout(() => {
+                    showSuccessNotification.value = false;
+                }, 2000);
+            }).catch(err => {
+                console.error('Could not copy text: ', err);
+            });
         }
 
         const genMML = () => {
@@ -1759,7 +1732,7 @@ export default {
                                     outString += k[i] + 'V' + note.volume + 'N' + (note.pitch - 12) + (i === k.length - 1 ? '' : '&');
                                 }
                             } else {
-                                outString += noteWidthToMML(note.width + 1) + 'V' + note.volume + 'N' + (note.pitch-12);
+                                outString += noteWidthToMML(note.width + 1) + 'V' + note.volume + 'N' + (note.pitch - 12);
                             }
                             prevNoteEnd = note.left + note.width + 1;
                         }
@@ -1815,7 +1788,7 @@ export default {
 
         function tokenizeMML(mmlString) {
             let tokens = [];
-            
+
             // Run regex patterns over the input
             for (const [key, regex] of Object.entries(patterns)) {
                 let match;
@@ -1834,13 +1807,13 @@ export default {
             // This is NOT optimal, but it works.
             let newTokenList = JSON.parse(JSON.stringify(tokenList));
             let totalPasses = 10;
-            
+
             for (let pass = 0; pass < totalPasses; ++pass) {
                 let octave = 4;
                 let length = '4';
                 let tempo = '120';
                 let volume = '8';
-            
+
                 for (let i = 0; i < newTokenList.length; ++i) {
                     let token = newTokenList[i];
                     if (token.type === 'LENGTH') {
@@ -1860,7 +1833,7 @@ export default {
                             i--;
                         }
                     } else if (token.type === 'TEMPO') {
-                        let tokenTempo =  token.value.split('T')[1]; // BUG: THERE IS A BUG WHERE HAVING A T150 IN TRACK 1 AND A T120 IN TRACK 2 AFTER THE MARKER IN TRACK 1 WILL CAUSE TRACK 2 TO DELETE ITS T120 BECAUSE IT DOESNT SEE/RECOGNIZE THAT THE TEMPO WAS CHANGED IN TRACK 1 BEFORE THIS TRACK
+                        let tokenTempo = token.value.split('T')[1]; // BUG: THERE IS A BUG WHERE HAVING A T150 IN TRACK 1 AND A T120 IN TRACK 2 AFTER THE MARKER IN TRACK 1 WILL CAUSE TRACK 2 TO DELETE ITS T120 BECAUSE IT DOESNT SEE/RECOGNIZE THAT THE TEMPO WAS CHANGED IN TRACK 1 BEFORE THIS TRACK
                         if (tokenTempo !== tempo) {
                             tempo = tokenTempo;
                         } else {
@@ -1876,8 +1849,8 @@ export default {
                         if (!token.value.includes('N'))
                             continue;
                         let notePitch = Number(token.value.split('N')[1]);
-                        let noteOctave = Math.floor(notePitch/12);
-                        let noteKey = noteNames[notePitch - 12*noteOctave];
+                        let noteOctave = Math.floor(notePitch / 12);
+                        let noteKey = noteNames[notePitch - 12 * noteOctave];
                         if (noteOctave !== octave) {
                             let diff = noteOctave - octave;  // Positive diff means noteOctave is higher.
                             let octaveChanges = [];
@@ -1886,7 +1859,7 @@ export default {
                                 // Insert `>` or `<` for smaller octave differences.
                                 let symbol = diff > 0 ? '>' : '<';
                                 for (let j = 0; j < Math.abs(diff); ++j) {
-                                    octaveChanges.push({ type: 'OCTAVE', value: symbol, index: token.index+j });
+                                    octaveChanges.push({ type: 'OCTAVE', value: symbol, index: token.index + j });
                                 }
                             } else {
                                 // Use absolute octave changes for larger octave differences.
@@ -1903,17 +1876,17 @@ export default {
                         }
                     }
                 }
-                
+
                 // Now we simplify lengths
                 let lengthIndex = 0;
                 for (let i = 0; i < newTokenList.length; ++i) {
                     let token = newTokenList[i];
-                    let prevToken = i > 0 ? newTokenList[i-1] : null;
+                    let prevToken = i > 0 ? newTokenList[i - 1] : null;
                     if (token.type === 'LENGTH') {
                         // Count until we hit the next length token or the end of the list.
                         let noteCount = 0;
                         let noteIndexes = [];
-                        for (let j = i+1; j < newTokenList.length; ++j) {
+                        for (let j = i + 1; j < newTokenList.length; ++j) {
                             let token2 = newTokenList[j];
                             // if note/rest has no postfix number, then we add it to the count
                             if ((token2.type === 'NOTE' || token2.type === 'REST') && token2.value.replace(/[A-GRN][#]?/g, '') === '') {
@@ -1923,16 +1896,16 @@ export default {
                                 break;
                             }
                         }
-                        
+
                         if ((prevToken && prevToken.type === 'TIE') || noteCount * token.value.length <= token.value.length + noteCount) {
                             // remove this length tag and put the length on the notes
                             // console.log(noteCount);
                             for (const noteIndex of noteIndexes) {
                                 newTokenList[noteIndex].value = newTokenList[noteIndex].value + token.value.split('L')[1];
-                            } 
+                            }
                             newTokenList.splice(i, 1);
                         }
-                        
+
                     } else if (token.type === 'TEMPO') {
                         // Look for any duplicate tempos that have no notes or rests between them.
                     } else if (token.type === 'VOLUME') {
@@ -1940,7 +1913,7 @@ export default {
                     }
                 }
             }
-            
+
             return newTokenList;
         }
 
@@ -1982,10 +1955,10 @@ export default {
 
                     if (nextNote.value.startsWith('N')) {
                         notePitch = Number(nextNote.value.split('N')[1]);
-                        noteOctave = Math.floor(notePitch/12);
-                        noteName = noteNames[(notePitch - 12*noteOctave) % 12];
+                        noteOctave = Math.floor(notePitch / 12);
+                        noteName = noteNames[(notePitch - 12 * noteOctave) % 12];
                         let dotted = noteLength.includes('.');
-                        noteLength = Number(noteLength.slice(0, noteLength.length-dotted)) * (dotted ? 2/3 : 1);
+                        noteLength = Number(noteLength.slice(0, noteLength.length - dotted)) * (dotted ? 2 / 3 : 1);
                     } else {
                         let sharp = nextNote.value.includes('#') || nextNote.value.includes('+')
                         let flat = nextNote.value.includes('-');
@@ -1997,17 +1970,17 @@ export default {
                         if (noteIndex === 0 && sharp)
                             noteOctave += 1;
                         if (nextNote.value.length - dotted > 1 + sharp + flat) { // If the note has a length added on
-                            noteLength = Number(nextNote.value.slice(((sharp || flat) ? 2 : 1), nextNote.value.length - dotted)) * (dotted ? 2/3 : 1);
+                            noteLength = Number(nextNote.value.slice(((sharp || flat) ? 2 : 1), nextNote.value.length - dotted)) * (dotted ? 2 / 3 : 1);
                         } else {// If the note has no added length
                             let Ldotted = length.includes('.');
                             dotted = Ldotted || dotted;
-                            noteLength = Number(length.slice(0, length.length-Ldotted)) * (dotted ? 2/3 : 1);
+                            noteLength = Number(length.slice(0, length.length - Ldotted)) * (dotted ? 2 / 3 : 1);
                         }
                         notePitch = noteNames.indexOf(noteName) + 12 * noteOctave;
                     }
                     if (previousNote.pitch - 12 === notePitch) {
-                        builderX += 256/noteLength;
-                        previousNote.width += 256/noteLength;
+                        builderX += 256 / noteLength;
+                        previousNote.width += 256 / noteLength;
                         previousNote.length += noteLength;
                         previousNote.end += noteLength;
                         i++;
@@ -2028,7 +2001,7 @@ export default {
                         volume = tokenVolume;
                     }
                 } else if (token.type === 'TEMPO') {
-                    let tokenTempo =  token.value.split('T')[1];
+                    let tokenTempo = token.value.split('T')[1];
                     if (tokenTempo !== tempo) {
                         tempo = tokenTempo;
                         tempoMarkers.value.push({
@@ -2060,10 +2033,10 @@ export default {
 
                     if (token.value.startsWith('N')) {
                         notePitch = Number(token.value.split('N')[1]);
-                        noteOctave = Math.floor(notePitch/12);
-                        noteName = noteNames[(notePitch - 12*noteOctave) % 12];
+                        noteOctave = Math.floor(notePitch / 12);
+                        noteName = noteNames[(notePitch - 12 * noteOctave) % 12];
                         let dotted = noteLength.includes('.');
-                        noteLength = Number(noteLength) * (dotted ? 2/3 : 1);
+                        noteLength = Number(noteLength) * (dotted ? 2 / 3 : 1);
                     } else {
                         let sharp = token.value.includes('#') || token.value.includes('+');
                         let flat = token.value.includes('-');
@@ -2075,11 +2048,11 @@ export default {
                         if (noteIndex === 0 && sharp)
                             noteOctave += 1;
                         if (token.value.length - dotted > 1 + sharp + flat) { // If the note has a length added on
-                            noteLength = Number(token.value.slice(((sharp || flat) ? 2 : 1), token.value.length)) * (dotted ? 2/3 : 1);
+                            noteLength = Number(token.value.slice(((sharp || flat) ? 2 : 1), token.value.length)) * (dotted ? 2 / 3 : 1);
                         } else { // If the note has no added length
                             let Ldotted = length.includes('.');
                             dotted = Ldotted || dotted;
-                            noteLength = Number(length) * (dotted ? 2/3 : 1);
+                            noteLength = Number(length) * (dotted ? 2 / 3 : 1);
                         }
                         notePitch = noteNames.indexOf(noteName) + 12 * noteOctave;
                     }
@@ -2087,11 +2060,11 @@ export default {
                     const newNote = {
                         left: builderX, // In pixels
                         top: 2568 - notePitch * gridHeight, // In pixels, the top of the note
-                        width: 256/noteLength - 1, // In pixels (we assume 4/4 time, which is 16 pixels per beat)
+                        width: 256 / noteLength - 1, // In pixels (we assume 4/4 time, which is 16 pixels per beat)
                         highlighted: false,
                         color: newTrack.color,
                         id: notesInGrid.value.length + Date.now(),
-                        name: noteName + noteOctave, 
+                        name: noteName + noteOctave,
                         pitch: notePitch + 12,
                         length: noteLength, // In beats
                         start: builderX, // In beats
@@ -2123,7 +2096,7 @@ export default {
                 if (line.length < 2) {
                     continue;
                 }
-                tokenizedSections.push({title: line[0].trim(), tokens: tokenizeMML(line[1].trim().toUpperCase())});
+                tokenizedSections.push({ title: line[0].trim(), tokens: tokenizeMML(line[1].trim().toUpperCase()) });
             }
 
             // Convert the titles and tokens into tracks with notes in them (and any tempo markers).
@@ -2150,13 +2123,13 @@ export default {
 
             let handleFileSelect = async () => {
                 const file = hiddenFileInput.files[0];
-                
+
                 hiddenFileInput.removeEventListener('change', handleFileSelect);
 
                 if (file) {
                     const reader = new FileReader();
 
-                    reader.onload = async function(e) {
+                    reader.onload = async function (e) {
                         const arrayBuffer = e.target.result;
 
                         try {
@@ -2169,12 +2142,13 @@ export default {
                             const fileDuration = parsedMIDI.duration;
                             const fileTempo = parsedMIDI.tempoChanges.at(-2).tempo;
 
+                            const firstAddedTrackIndex = tracks.value.length ;
 
                             parsedMIDI.tracks.forEach((track, idx) => {
 
                                 const trackName = track.name || `Track ${idx}`;
                                 //console.log(trackName);
-                                
+
                                 const activeNotes = []; // {pitch: 66, ticks: 44, velocity: 127}
                                 const sustainBuffer = [];
                                 const pairedNotes = []; // {startTicks: 1, pitch: 66, duration: 76 (in ticks, end ticks minus start ticks), velocity: 65}
@@ -2277,7 +2251,7 @@ export default {
                                         const noteLength = Math.round(note.duration / ticksPerBeat * 64) / 64; // in beats
                                         const noteWidth = Math.round(note.duration / ticksPerBeat * 64 / 4) * 4 - 1;
                                         const noteLeft = Math.round(note.startTicks / ticksPerBeat * 64 / 4) * 4; // t * b/t * 64px/b = px (1/4 note at 120 bpm (default) is 64 px wide)
-                                        const noteVolume = Math.floor(note.velocity/8);
+                                        const noteVolume = Math.floor(note.velocity / 8);
 
                                         const newNote = {
                                             left: noteLeft, // In pixels
@@ -2286,7 +2260,7 @@ export default {
                                             highlighted: false,
                                             color: newTrack.color,
                                             id: notesInGrid.value.length + Date.now(),
-                                            name: noteName + noteOctave, 
+                                            name: noteName + noteOctave,
                                             pitch: notePitch + 12,
                                             length: noteLength, // In beats
                                             start: noteLeft / 16, // In beats
@@ -2303,7 +2277,7 @@ export default {
                             });
 
                             tempo.value = Math.round(fileTempo);
-                            
+
                             const tempoMarkersTemp = [];
                             let previousTempo = fileTempo;
 
@@ -2316,8 +2290,8 @@ export default {
                                 let marker = {
                                     left: Math.round(tempo.ticks / ticksPerBeat * 16) * 4,
                                     tempo: Math.round(tempo.tempo),
-                                    color: tracks.value[0].color,
-                                    parentTrack: tracks.value[0],
+                                    color: tracks.value[firstAddedTrackIndex].color,
+                                    parentTrack: tracks.value[firstAddedTrackIndex],
                                     muted: false
                                 };
                                 tempoMarkersTemp.push(marker);
@@ -2365,7 +2339,7 @@ export default {
             }
         }
 
-        const removeNote = (note, fromList, event=null) => {
+        const removeNote = (note, fromList, event = null) => {
             if (event && event.buttons !== 2)
                 return;
             selectedNotes.value = selectedNotes.value.filter(n => n.id !== note.id);
@@ -2458,7 +2432,6 @@ export default {
 </script>
 
 <style scoped>
-
 .piano-container {
     position: fixed;
     /* Fix to the left side of the screen */
@@ -2601,9 +2574,11 @@ export default {
     height: 0;
     border-left: 10px solid transparent;
     border-right: 10px solid transparent;
-    border-top: 10px solid #bbb; /* Triangle color */
+    border-top: 10px solid #bbb;
+    /* Triangle color */
     left: 50%;
-    bottom: 0; /* Inside the ruler */
+    bottom: 0;
+    /* Inside the ruler */
     transform: translateX(-50%);
 }
 
@@ -2621,9 +2596,11 @@ export default {
     height: 0;
     border-left: 10px solid transparent;
     border-right: 10px solid transparent;
-    border-top: 10px solid #f00; /* Triangle color */
+    border-top: 10px solid #f00;
+    /* Triangle color */
     left: 50%;
-    bottom: 0; /* Inside the ruler */
+    bottom: 0;
+    /* Inside the ruler */
     transform: translateX(-50%);
     z-index: 100;
 }
@@ -2634,7 +2611,8 @@ export default {
     height: 100vh;
     background-color: #f00;
     left: 50%;
-    bottom: - 100%; /* Below the ruler */
+    bottom: - 100%;
+    /* Below the ruler */
     transform: translateX(-50%);
     z-index: 100;
 }
@@ -2684,19 +2662,19 @@ export default {
 }
 
 .note {
-  position: absolute;
-  background-color: rgba(0, 120, 255, 0.5);
-  border: 1px solid #0078d4;
-  cursor: pointer;
-  box-sizing: border-box;
-  user-select: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 20;
-  font-size: 70%;
-  margin-left: 1px;
-  overflow: hidden;
+    position: absolute;
+    background-color: rgba(0, 120, 255, 0.5);
+    border: 1px solid #0078d4;
+    cursor: pointer;
+    box-sizing: border-box;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+    font-size: 70%;
+    margin-left: 1px;
+    overflow: hidden;
 }
 
 .note:active {
@@ -2707,7 +2685,8 @@ export default {
     position: absolute;
     right: 0;
     top: 0;
-    width: 40%; /* Adjust as needed */
+    width: 40%;
+    /* Adjust as needed */
     max-width: 10px;
     height: 100%;
     cursor: ew-resize;
@@ -2715,32 +2694,38 @@ export default {
 }
 
 .volume-handle {
-  width: 12px;
-  height: 60%; /* Half the width to create the half-circle */
-  background-color: rgba(0, 0, 0, 0.2);
-  position: absolute;
-  bottom: -35%; /* Align to the bottom of the note */
-  left: 50%;
-  transform: translateX(-50%);
-  border-radius: 50%; /* Create a circle */
-  clip-path: inset(0 0 50% 0); /* Clip top half, making it a half-circle */
-  cursor: ns-resize; /* Show a pointer to indicate draggable */
+    width: 12px;
+    height: 60%;
+    /* Half the width to create the half-circle */
+    background-color: rgba(0, 0, 0, 0.2);
+    position: absolute;
+    bottom: -35%;
+    /* Align to the bottom of the note */
+    left: 50%;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    /* Create a circle */
+    clip-path: inset(0 0 50% 0);
+    /* Clip top half, making it a half-circle */
+    cursor: ns-resize;
+    /* Show a pointer to indicate draggable */
 }
 
 .play-button {
-  position: fixed;
-  top: 10px;
-  right: 10px;
-  padding: 10px 20px;
-  font-size: 16px;
-  cursor: pointer;
-  border: none;
-  border-radius: 5px;
-  background-color: #0078d4;
-  color: white;
-  z-index: 1000; /* Ensure it's on top of other elements */
-  outline: none;
-  box-shadow: 0 3px 4px rgba(0, 0, 0, 0.3);
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    border: none;
+    border-radius: 5px;
+    background-color: #0078d4;
+    color: white;
+    z-index: 1000;
+    /* Ensure it's on top of other elements */
+    outline: none;
+    box-shadow: 0 3px 4px rgba(0, 0, 0, 0.3);
 }
 
 .loop-wrapper {
@@ -2757,6 +2742,7 @@ export default {
     border-radius: 5px;
     box-shadow: 0 3px 4px rgba(0, 0, 0, 0.3);
     z-index: 1000;
+    width: 65px;
 }
 
 .scroll-wrapper {
@@ -2772,7 +2758,8 @@ export default {
     border-radius: 5px;
     background-color: #0078d4;
     color: white;
-    z-index: 1000; /* Ensure it's on top of other elements */
+    z-index: 1000;
+    /* Ensure it's on top of other elements */
     outline: none;
     box-shadow: 0 3px 4px rgba(0, 0, 0, 0.3);
 }
@@ -2800,5 +2787,4 @@ export default {
     z-index: 10;
     left: 0px;
 }
-
 </style>

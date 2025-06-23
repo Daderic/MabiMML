@@ -27,7 +27,6 @@ export default {
 </script>
 
 <style scoped>
-
 .pattern-editor {
     height: 100%;
     width: 100%;
