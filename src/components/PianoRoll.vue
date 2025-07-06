@@ -9,7 +9,7 @@
             Auto-scroll:
             <input type="checkbox" v-model="autoScrollSong" />
         </label>
-        <ExportMenu />
+        <ExportMenu :tracks="tracks" :generateTokens="genTokensOutright" :renderTokens="renderTokens" :copyToClipboard="copyToClipboard"/>
         <HelpMenu />
         <div v-if="showSuccessNotification" class="copyNotification">
             {{ successNotificationText }}
@@ -34,7 +34,7 @@
                 <input type="number" id="tempo-select" v-model.number="tempo" min="40" max="240">
             </div>
             <button class="track-splitter" @click="trackify">Split Track</button>
-            <!--<button class="MML-converter" @click="genMML" style="margin-left: 10px;">Gen MML</button>-->
+            <!--<button class="MML-converter" @click="genTokensOutright" style="margin-left: 10px;">Gen MML</button>-->
             <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
             <button @click="importMidi" style="margin-left: 10px;">Import MIDI</button>
             <input type="file" id="hiddenFileInput" style="display: none" accept=".mid,.midi" />
@@ -1078,7 +1078,7 @@ export default {
             }
         };
 
-        const changeInstrument = async (fromTrack=false) => {
+        const changeInstrument = async (fromTrack = false) => {
             if (synth.value && selectedInstrument.value) {
                 selectedTrack.value.instrument = selectedInstrument.value;
 
@@ -1096,7 +1096,6 @@ export default {
         const startPositions = new Map();
 
         const startDrag = (note, event, placeNote = true) => {
-            // console.log(note.id);
             event.preventDefault();
             if (event.button === 0 && resizingNotes.value.length === 0 && volumeChangingNotes.value.length === 0) { // Ensure we're dragging with left button
                 if (note.highlighted) {
@@ -1405,7 +1404,6 @@ export default {
                 const z2 = zoomScalar.value;
                 gridWrapper.value.scrollLeft += x * (z2 / z1 - 1);
             }
-            //console.log(gridCanvas.value.width);
         }
 
         function clearSelection() {
@@ -1432,8 +1430,6 @@ export default {
                 const rect = gridCanvas.value.getBoundingClientRect();
                 currentX.value = event.clientX - rect.left + scrollX.value;
                 currentY.value = event.clientY - rect.top;
-                // console.log(currentX.value, currentY.value);
-                // This is where we add the logic to highlight the notes that might be selected (or we can select them I dont really care)
             }
         };
 
@@ -1464,7 +1460,6 @@ export default {
                 };
 
                 if (intersects(selectionRect, itemRect)) {
-                    //console.log(note.name + ' intersects with selection.');
                     selectNote(note);
                 }
             });
@@ -1533,7 +1528,6 @@ export default {
                 notesInGrid.value.push(newNote);
                 selectedTrack.value.notes.unshift(newNote);
                 startDrag(notesInGrid.value.find(note => note.id == id), event, false);
-                //console.log('NOTE X,Y', newNote.left, newNote.top);
             } else {
                 // Here, we have identified that we clicked on an existing note.
                 if (event.button === 0) {
@@ -1592,7 +1586,6 @@ export default {
             });
 
             for (const note of notesList) {
-                //console.log(note.id);
                 for (const trackWrapper of trackWrappers) {
                     if (!trackWrapper.notes[0] || trackWrapper.notes[0].left + trackWrapper.notes[0].width < note.left) {
                         trackWrapper.notes.unshift(note);
@@ -1657,6 +1650,351 @@ export default {
             });
         }
 
+        function placeOptimalLengthTokens(tokens) {
+            //const noteLikeTokens = tokens.filter(t => t.type === 'NOTE' || t.type === 'REST' || t.type === 'TIE');
+
+            const segments = [];
+            for (let i = 0; i < tokens.length; ) {
+                const t = tokens[i];
+                if (t.type === 'REST' || t.type === 'NOTE') {
+                    const segment = [t];
+                    i++;
+                    while (i < tokens.length && tokens[i].type === 'TIE') {
+                        segment.push(tokens[i]);
+                        i++;
+                        if (i < tokens.length && tokens[i].type === t.type) {
+                            segment.push(tokens[i]);
+                            i++;
+                        }
+                    }
+                    segment.reverse();
+                    segments.push(segment);
+                } else {
+                    i++;
+                }
+            }
+
+            const n = segments.length;
+
+            // Dynamic programming tables
+            const dpCosts = Array.from({ length: n + 1 }, () => new Map());
+            const dpBackpointer = Array.from({ length: n + 1 }, () => new Map());
+
+            dpCosts[0].set(4, 0);  // Start with default length = 4 and cost = 0
+
+            function extractLengthInfo(segment) {
+                const token = segment[0];
+                const length = token.dotted ? 1.5 * 256 / token.length : 256 / token.length;
+                const dotted = token.dotted ? 1 : 0;
+                const charLen = (token.type === 'REST') ? 1 : token.name.length;
+                return { length, dotted, charLen };
+            }
+
+            for (let i = 0; i < n; ++i) {
+                const { length, dotted, charLen } = extractLengthInfo(segments[i]);
+
+                for (const [currentDefault, accumulatedCost] of dpCosts[i]) {
+                    const matchesDefault = length === currentDefault;
+                    // Option A: keep current default
+                    let costToAdd = charLen;
+                    if (!matchesDefault) {
+                        costToAdd += String(length).length + dotted;
+                    }
+
+                    let newCost = accumulatedCost + costToAdd;
+
+                    if (!dpCosts[i + 1].has(currentDefault) || newCost < dpCosts[i + 1].get(currentDefault)) {
+                        dpCosts[i + 1].set(currentDefault, newCost);
+                        dpBackpointer[i + 1].set(currentDefault, [currentDefault, 'keep']);
+                    }
+
+                    // Option B: change default
+                    let costWithChange = accumulatedCost + charLen + String(length).length + 1 + dotted;
+
+                    if (!dpCosts[i + 1].has(length) || costWithChange < dpCosts[i + 1].get(length)) {
+                        dpCosts[i + 1].set(length, costWithChange);
+                        dpBackpointer[i + 1].set(length, [currentDefault, 'change']);
+                    }
+                }
+            }
+
+            // Find the minimal cost at the final position
+            let finalDefault = null;
+            let minimalTotalCost = Infinity;
+            for (const [defaultLength, cost] of dpCosts[n]) {
+                if (cost < minimalTotalCost) {
+                    minimalTotalCost = cost;
+                    finalDefault = defaultLength;
+                }
+            }
+
+            // Backtrack to reconstruct optimized sequence
+            const reconstructed = [];
+            let currentDefault = finalDefault;
+            let i = n;
+
+            while (i > 0) {
+                const [prevDefault, action] = dpBackpointer[i].get(currentDefault);
+                const segment = segments[i - 1];
+
+                for (const tok of segment) {
+                    reconstructed.push(tok);
+                }
+
+                if (action === 'change') {
+                    reconstructed.push({ type: 'LENGTH', length: currentDefault, dotted: segment[0].dotted, start: segment[segment.length - 1].start });
+                }
+
+                currentDefault = prevDefault;
+                i--;
+            }
+
+            reconstructed.reverse();
+
+            return reconstructed;
+        }
+
+        const genTokensOutright = (singleTrack=null) => {
+            // Should split this per track.
+            const tracksToConsider = [singleTrack] || tracks.value;
+            if (tracksToConsider[0] === null || tracksToConsider === 0)
+                return;
+            const allTokens = [];
+            for (const track of tracksToConsider) {
+                let tokens = [];
+                for (const note of track.notes) {
+                    const noteLengths = noteWidthToMML(note.width + 1).split('&');
+                    const noteName = note.name.slice(0, note.name.length - 1).toLowerCase();
+                    let left_augment = 0;
+                    for (let i = 0; i < noteLengths.length; ++i) {
+                        const dotted = noteLengths[i].endsWith('.');
+                        let length = Math.floor(256 / Number(noteLengths[i].slice(1, noteLengths[i].length)));
+                        if (dotted)
+                            length = Math.floor(1.5 * length);
+                        tokens.push({
+                            type: 'NOTE',
+                            pitch: note.pitch - 12,
+                            volume: note.volume,
+                            length: length,
+                            start: note.left + left_augment,
+                            octave: Math.floor((note.pitch - 12) / 12),
+                            name: noteName,
+                            dotted: dotted
+                        });
+                        left_augment += length;
+                        if (i !== noteLengths.length - 1) {
+                            tokens.push({
+                                type: 'TIE',
+                                pitch: note.pitch - 12,
+                                start: note.left + left_augment
+                            });
+                        }
+                    }
+                }
+
+                tokens.sort((a, b) => {
+                    return a.start - b.start;
+                });
+
+                // Add rests between notes
+                for (let i = -1; i < tokens.length - 1; ++i) {
+                    const note1 = i > -1 ? tokens[i] : {
+                            type: 'NOTE',
+                            length: 0,
+                            start: 0
+                        };
+                    const note2 = tokens[i + 1];
+                    if (note1.type != 'NOTE' || note2.type != 'NOTE')
+                        continue;
+                    const gap = note2.start - (note1.start + note1.length);
+                    if (gap > 0) {
+                        const restLengths = noteWidthToMML(gap).split('&');
+                        let left_augment = 0;
+                        for (let j = 0; j < restLengths.length; ++j) {
+                            const dotted = restLengths[j].endsWith('.');
+                            let restLength = Math.floor(256 / Number(restLengths[j].slice(1, restLengths[j].length)));
+                            if (dotted)
+                                restLength = Math.floor(1.5 * restLength);
+                            tokens.splice(i + j + 1, 0, {
+                                type: "REST",
+                                length: restLength,
+                                start: note1.start + note1.length + left_augment,
+                                dotted: dotted
+                            });
+                        }
+                        ++i;
+                    }
+                }
+
+                // Run length optimization
+                tokens = placeOptimalLengthTokens(tokens);
+
+                // Run octave insertion/optimization
+                let octaveState = 4;
+                let lengthState = 4;
+                let dottedState = false;
+                for (let i = 0; i < tokens.length; i++) {
+                    const token = tokens[i];
+                    if (token.type === 'LENGTH') {
+                        lengthState = token.length;
+                        dottedState = token.dotted;
+                        continue;
+                    }
+                    if (token.type !== 'NOTE' || token.name.startsWith('n'))
+                        continue;
+                    let octaveDifference = token.octave - octaveState;
+                    let octaveDistance = Math.abs(octaveDifference);
+                    if (octaveDistance === 1 && !(tokens[i + 1] && tokens[i + 1].octave !== octaveState)) {
+                        if (octaveDifference < 0 && token.name === 'b') {
+                            token.name = 'c-';
+                            token.octave += 1;
+                            octaveDifference = 0;
+                            octaveDistance = 0;
+                        } else if (octaveDifference > 0 && token.name === 'c') {
+                            token.name = 'b#';
+                            token.octave -= 1;
+                            octaveDifference = 0;
+                            octaveDistance = 0;
+                        }
+                    }
+                    octaveState = token.octave;
+                    let octaveText;
+                    if (octaveDistance > 2) {
+                        octaveText = `o${token.octave}`;
+                    } else {
+                        octaveText = `${octaveDifference < 0 ? '<' : '>'}`.repeat(octaveDistance);
+                    }
+                    if (tokens[i + 1] && tokens[i + 2] && tokens[i + 1].type === 'NOTE' && tokens[i + 2].type === 'NOTE' && tokens[i + 1].octave !== token.octave && tokens[i + 2].octave === token.octave) {
+                        const token2 = tokens[i + 1];
+                        const token2Length = token2.dotted ? 1.5 * 256 / token2.length : 256 / token2.length;
+                        if (Math.abs(token.pitch - token2.pitch) === 1) {
+                            const difference = token.pitch - token2.pitch;
+                            // if difference is negative, add a sharp (#), else add a flat (-)
+                            token2.octave += difference;
+                            if (difference < 0) {
+                                token2.name = token.name + '#';
+                            } else {
+                                token2.name = token.name + '-';
+                            }
+                            i++;
+                            continue;
+                        } else if (token2.name.length > 1 && token2Length === lengthState && token2.dotted === dottedState) {
+                            token2.name = `n${token2.pitch}`;
+                        }
+                    }
+                    if (octaveText === '')
+                        continue;
+                    tokens.splice(i, 0, {
+                        type: "OCTAVE",
+                        start: token.start,
+                        text: octaveText
+                    });
+                    i++;
+                }
+
+                // Run Volume insertion
+                let volumeState = 8;
+                for (let i = 0; i < tokens.length; ++i) {
+                    const token = tokens[i];
+                    if (token.type !== 'NOTE' || token.volume === volumeState)
+                        continue;
+                    volumeState = token.volume;
+                    tokens.splice(i, 0, {
+                        type: "VOLUME",
+                        start: token.start,
+                        volume: volumeState
+                    });
+                    i++;
+                }
+
+                // Save tempo markers for the end, after doing rests, then lengths, then octaves, then volumes
+                // Remove any duplicate tempo markers and push only relevant ones
+                const latestTempoMarkers = new Map();
+
+                if (tempo.value !== 120) {
+                    latestTempoMarkers.set(0, {
+                        parentTrack: track,
+                        tempo: tempo.value,
+                        left: 0
+                    });
+                }
+
+                for (const marker of tempoMarkers.value) {
+                    if (marker.parentTrack === track) {
+                        latestTempoMarkers.set(marker.left, marker);
+                    }
+                }
+
+                for (const marker of latestTempoMarkers.values()) {
+                    tokens.push({
+                        type: 'TEMPO',
+                        tempo: marker.tempo,
+                        start: marker.left
+                    });
+                }
+
+                tokens.sort((a, b) => {
+                    if (a.start - b.start === 0) {
+                        if (a.type === 'TEMPO')
+                            return -1
+                    }
+                    return a.start - b.start;
+                });
+
+                //console.log(tokens);
+                //console.log(renderTokens(tokens));
+                allTokens.push(tokens);
+            }
+            return allTokens;
+        };
+
+        function renderTokens(tokenList) {
+            let output = [];
+            let activeDefault = 4;
+            let activeDotted = false;
+
+            if (!tokenList) {
+                return;
+            }
+
+            for (const tok of tokenList) {
+                if (tok.type === 'LENGTH') {
+                    activeDefault = tok.length;
+                    activeDotted = tok.dotted;
+                    output.push(`L${activeDefault}${tok.dotted ? '.' : ''}`);
+                } else if (tok.type === 'TIE') {
+                    output.push('&');
+                } else if (tok.type === 'OCTAVE') {
+                    output.push(tok.text);
+                } else if (tok.type === 'VOLUME') {
+                    output.push(`V${tok.volume}`);
+                } else if (tok.type === 'REST') {
+                    const length = tok.dotted ? 1.5 * 256 / tok.length : 256 / tok.length;
+                    if (length === activeDefault && tok.dotted === activeDotted) {
+                        output.push('r');
+                    } else if (length === activeDefault && tok.dotted) {
+                        output.push('r.');
+                    } else {
+                        output.push(`r${length}${tok.dotted ? '.' : ''}`);
+                    }
+                } else if (tok.type === 'NOTE') {
+                    const length = tok.dotted ? 1.5 * 256 / tok.length : 256 / tok.length;
+                    if (length === activeDefault && tok.dotted === activeDotted) {
+                        output.push(tok.name);
+                    } else if (length === activeDefault && tok.dotted) {
+                        output.push(tok.name, '.')
+                    } else {
+                        output.push(`${tok.name}${length}${tok.dotted ? '.' : ''}`);
+                    }
+                } else if (tok.type === 'TEMPO') {
+                    output.push(`T${tok.tempo}`);
+                }
+            }
+
+            return output.join('');
+        }
+
+
         const genMML = () => {
             for (const track of tracks.value) {
                 track.notes.sort((a, b) => {
@@ -1668,7 +2006,6 @@ export default {
                 track.notes.reverse();
             }
             let outString = 'T' + tempo.value;
-            // console.log(tracks.value.length, tracks.value);
             let audibleTracks = [];
 
             for (const track of tracks.value) {
@@ -2142,7 +2479,7 @@ export default {
                             const fileDuration = parsedMIDI.duration;
                             const fileTempo = parsedMIDI.tempoChanges.at(-2).tempo;
 
-                            const firstAddedTrackIndex = tracks.value.length ;
+                            const firstAddedTrackIndex = tracks.value.length;
 
                             parsedMIDI.tracks.forEach((track, idx) => {
 
@@ -2399,9 +2736,12 @@ export default {
             ruler,
             loopSong,
             trackify,
+            tracks,
             noteWidthToMML,
             backgroundStyle,
             genMML,
+            genTokensOutright,
+            renderTokens,
             showSuccessNotification,
             successNotificationText,
             showFailedNotification,
@@ -2425,7 +2765,8 @@ export default {
             scrollX,
             gridWrapper,
             tryRemoveNote,
-            importMidi
+            importMidi,
+            copyToClipboard
         };
     }
 };
