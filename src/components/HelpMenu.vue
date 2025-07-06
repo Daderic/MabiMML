@@ -63,6 +63,8 @@
                 decrease it.</li>
               <li>Notes start with a default volume of 8.</li>
               <li>Notes have a volume range from 1 to 15.</li>
+              <li>Changing a note's volume while multiple notes are selected will change the volume of all selected
+                notes by the same amount.</li>
             </ul>
 
             <h3>Selecting Multiple Notes</h3>
@@ -123,14 +125,19 @@
 
             <h3>Exporting to MML</h3>
             <ul>
-              <li>Clicking on the "Gen MML" button will copy the MML of audible tracks to your clipboard.</li>
-              <li>Only unmuted/audible tracks will be copied to your clipboard.</li>
-              <li>A maximum of four tracks can be exported at once.</li>
+              <li>Clicking on the "Export" button will open a menu allowing the export of MML to your clipboard (it may
+                take a moment to open).</li>
+              <li>A maximum of four tracks can be exported at once, or three tracks if the 'Exclude Song Part' box is
+                checked.</li>
               <li>Remember that the fourth track in a score is always the 'song' track.</li>
-              <li>Tracks that have multiple notes playing at once will NOT export properly, so be sure to split them
+              <li>Tracks that have multiple notes playing at once will NOT be exportable (marked with an asterisk), so be sure to split them
                 before export.</li>
-              <li>The exported MML will be moderately optimized for length, but don't expect them to be perfect.</li>
-              <li>Tracks will be exported sorted by number of notes. If a track has more notes, then it will be first.
+              <li>The exported MML will be moderately optimized for length; they will not be perfectly optimized.</li>
+              <li>Exported tracks are sorted by length by default, but this can be changed by unchecking the box.</li>
+              <li>When tracks are not sorted by length, they are sorted by the order in which they were selected.</li>
+              <li>In the future, tracks will be able to be split into separate Jabchiel-compatible scores based on the
+                rank you select. <strong>*Jabchiel export is currently non-functional*</strong>, but you can play with it
+                to see what is intended. 
               </li>
             </ul>
 
@@ -144,6 +151,15 @@
                 they will not import properly.</li>
               <li>Importing from Mabinogi directly will named the tracks according to which track they came from (e.g.
                 Melody, Harmony 1, Harmony 2, Song)</li>
+            </ul>
+
+            <h3>Importing MIDI</h3>
+            <ul>
+              <li>Clicking on the "Import MIDI" button will open your computer's file browser.</li>
+              <li>From there, you can select a standard MIDI file and it will be imported. Most MIDI files should work.
+              </li>
+              <li>Each MIDI track will be given its own track, regardless of polyphony.</li>
+              <li>Imported songs will automatically be quantized to the nearest 64th note boundary.</li>
             </ul>
 
             <h3>Tempo</h3>
@@ -176,10 +192,13 @@
 
             <h3>Planned Features</h3>
             <ul>
-              <li>MML export that lets you select track order manually.</li>
-              <li>MIDI import/export support</li>
-              <li>Support for saving/loading "projects"</li>
-              <li>Undo/Redo functionality</li>
+              <li>Jabchiel MML export.</li>
+              <li>MIDI export support.</li>
+              <li>Support for saving/loading "projects".</li>
+              <li>Undo/Redo functionality.</li>
+              <li>Better exported MML optimization.</li>
+              <li>Improved note rendering speed.</li>
+              <li>Other algorithm options for track splitting.</li>
             </ul>
 
             <p class="credits">Credits: Made by Daderic</p>

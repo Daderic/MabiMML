@@ -1844,7 +1844,7 @@ export default {
                         continue;
                     let octaveDifference = token.octave - octaveState;
                     let octaveDistance = Math.abs(octaveDifference);
-                    if (octaveDistance > 0 && octaveDistance < 3 && !(tokens[i + 1] && Math.abs(tokens[i + 1].octave - octaveState) > 2)) {
+                    if (octaveDistance === 1 && !(tokens[i + 1] && tokens[i + 1].octave !== octaveState)) {
                         if (octaveDifference < 0 && token.name === 'b') {
                             token.name = 'c-';
                             token.octave += 1;

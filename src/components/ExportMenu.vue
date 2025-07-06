@@ -16,9 +16,9 @@
                                 <div class="track-list">
                                     <label v-for="(track, index) in tracks" :key="index">
                                         <input type="checkbox" :checked="isSelected(track)"
-                                            :disabled="!isSelected(track) && selectedTracks.length >= maxSelectable"
+                                            :disabled="(!isSelected(track) && selectedTracks.length >= maxSelectable) || trackHasPolyphony(track)"
                                             @change="toggleTrack(track)" />
-                                        {{ track.name }} : {{ getRenderedTrackTokens(track, index).rendered.length }} char(s)
+                                        {{ track.name }} : {{ getRenderedTrackTokens(track, index).rendered.length }} char(s) {{ trackHasPolyphony(track) ? '*' : '' }}
                                     </label>
                                 </div>
                                 <button class="clear-btn" @click="clearSelection">Clear Selection</button>
@@ -178,8 +178,12 @@ export default {
         sortTracksByLength() {
             this.generateScores();
         },
-        tracks() {
-            this.tokenCache.clear();
+        tracks: {
+            handler() {
+                this.tokenCache.clear();
+                this.clearSelection();
+            },
+            deep: true
         }
     },
     methods: {
@@ -199,6 +203,18 @@ export default {
 
             this.generateScores();
 
+        },
+        trackHasPolyphony(track) {
+            for (let i = 0; i < track.notes.length; ++i) {
+                const rightNote = track.notes[i];
+                const leftNote = i + 1 < track.notes.length ? track.notes[i + 1] : null;
+                if (leftNote === null) return false;
+                // Scan from left to right. The next note should not have a left value <= note.end
+                if (rightNote.left <= leftNote.left + leftNote.width) {
+                    return true;
+                }
+            }
+            return false;
         },
         clearSelection() {
             this.selectedTracks = [];
