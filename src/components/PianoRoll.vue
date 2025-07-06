@@ -625,7 +625,7 @@ export default {
             isPlaying.value = true;
             markerStartPos = markerPosition.value;
             startTempo = tempo.value;
-            tempoMarkers.value.sort((a, b) => { a.left - b.left });
+            tempoMarkers.value.sort((a, b) => { return a.left - b.left });
             doMarkerAnim();
         }
 
@@ -654,7 +654,7 @@ export default {
                     tempoIdx++;
                     marker = tempoMarkers.value[tempoIdx];
                 }
-                //console.log(marker);
+                //console.log(startTempo, marker.left, markerPosition.value);
                 if (marker && marker !== null) {
                     if (markerPosition.value >= marker.left) {
                         tempoIdx++;
@@ -2030,7 +2030,7 @@ export default {
             }
 
             if (0 <= audibleTracks.length && audibleTracks.length <= 4) {
-                audibleTracks.sort((a, b) => b.notes.length - a.notes.length); // sort the largest track to the top
+                audibleTracks.sort((a, b) => {return b.notes.length - a.notes.length}); // sort the largest track to the top
                 //console.log(audibleTracks);
                 for (const track of audibleTracks) {
                     let prevNoteEnd = 0;
@@ -2047,7 +2047,7 @@ export default {
                     // Since our list of tempomarkers is sorted, we can pop (Array.shift()) the tempomarkers from our list as we go.
 
                     let notables = [...trackTempoMarkers, ...track.notes.slice().reverse()];
-                    notables.sort((a, b) => a.left - b.left);
+                    notables.sort((a, b) => {return a.left - b.left});
 
                     for (const note of notables) {
                         if (note.left >= prevNoteEnd + 4) {
@@ -2135,7 +2135,7 @@ export default {
             }
 
             // Sort tokens by their original index in the string
-            tokens.sort((a, b) => a.index - b.index);
+            tokens.sort((a, b) => {return a.index - b.index});
 
             return tokens;
         }
@@ -2631,11 +2631,13 @@ export default {
                                     parentTrack: tracks.value[firstAddedTrackIndex],
                                     muted: false
                                 };
+                                
                                 tempoMarkersTemp.push(marker);
                                 previousTempo = Math.round(tempo.tempo);
                             }
 
                             tempoMarkers.value = [...tempoMarkers.value, ...tempoMarkersTemp];
+                            //console.log(tempoMarkers.value);
 
                         } catch (err) {
                             console.error('Error parsing MIDI file:', err);
