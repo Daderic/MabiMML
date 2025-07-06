@@ -18,7 +18,7 @@
                                         <input type="checkbox" :checked="isSelected(track)"
                                             :disabled="!isSelected(track) && selectedTracks.length >= maxSelectable"
                                             @change="toggleTrack(track)" />
-                                        {{ track.name }} : {{ getRenderedTrackTokens(track, index).length }} char(s)
+                                        {{ track.name }} : {{ getRenderedTrackTokens(track, index).rendered.length }} char(s)
                                     </label>
                                 </div>
                                 <button class="clear-btn" @click="clearSelection">Clear Selection</button>
@@ -36,7 +36,7 @@
                                     <li><input type="checkbox" v-model="sortTracksByLength" checked /> Sort tracks by
                                         text length. </li>
                                     <li><input type="checkbox" v-model="excludeSongPart" /> Exclude Song Part </li>
-                                    <li><input type="checkbox" v-model="jabSplit" /> Split Score for Jabs </li>
+                                    <li><input type="checkbox" v-model="jabSplit" /> Split Score for Jabs (WIP) </li>
                                     <li>
                                         <select id="rank-select" :disabled="!jabSplit" v-model="selectedRank"
                                             @change="changeComposeRank">
@@ -109,7 +109,7 @@ export default {
             selectedRank: { name: '1', melody: 1200, harmony1: 800, harmony2: 500 },
             selectedRankIndex: 1,
             generatedScores: [],
-            tokenCache: {}
+            tokenCache: new Map()
         };
     },
     computed: {
@@ -165,7 +165,6 @@ export default {
                     { name: 'Practice', melody: 200, harmony1: 100, harmony2: 0 },
                 ];
             }
-            console.log(this.selectedRankIndex);
             this.selectedRank = this.composeRanks[this.selectedRankIndex];
             this.generateScores();
 
@@ -180,7 +179,7 @@ export default {
             this.generateScores();
         },
         tracks() {
-            this.tokenCache = {};
+            this.tokenCache.clear();
         }
     },
     methods: {
@@ -214,13 +213,46 @@ export default {
         hideExport() {
             this.isExportVisible = false;
         },
-        getRenderedTrackTokens(track, index) {
-            if (!this.tokenCache[index]) {
-                const tokens = this.generateTokens(track)[0];
-                const rendered = this.renderTokens(tokens);
-                this.tokenCache[index] = rendered;
+        getRenderedTrackTokens(track) {
+            if (this.tokenCache.has(track)) return this.tokenCache.get(track);
+            const tokens = this.generateTokens(track)[0];
+            const rendered = this.renderTokens(tokens);
+            const result = { tokens, rendered };
+            this.tokenCache.set(track, result);
+            return result;
+        },
+        splitTokensByLimit(tokens, limit) {
+            const chunks = [];
+            let current = [];
+            let length = 0;
+
+            for (let i = 0; i < tokens.length; i++) {
+                const next = [...current, tokens[i]];
+                const rendered = this.renderTokens(next);
+                const renderedLength = rendered.length;
+
+                if (renderedLength > limit) {
+                    if (current.length) {
+                        chunks.push(current);
+                        current = [tokens[i]];
+                        length = this.renderTokens(current).length;
+                    } else {
+                        // Single token too big: force split anyway
+                        chunks.push([tokens[i]]);
+                        current = [];
+                        length = 0;
+                    }
+                } else {
+                    current.push(tokens[i]);
+                    length = renderedLength;
+                }
             }
-            return this.tokenCache[index];
+
+            if (current.length) {
+                chunks.push(current);
+            }
+
+            return chunks;
         },
         generateScores() {
             const selected = [...this.selectedTracks];
@@ -229,14 +261,18 @@ export default {
                 selected.sort((a, b) => {
                     const aIndex = this.tracks.indexOf(a);
                     const bIndex = this.tracks.indexOf(b);
-                    return this.getRenderedTrackTokens(b, bIndex).length - this.getRenderedTrackTokens(a, aIndex).length;
+                    return this.getRenderedTrackTokens(b, bIndex).rendered.length - this.getRenderedTrackTokens(a, aIndex).rendered.length;
                 });
             }
 
             const numParts = this.excludeSongPart ? 3 : 4;
             const tokenized = selected.map(track => {
                 const index = this.tracks.indexOf(track);
-                return this.getRenderedTrackTokens(track, index);
+                return this.getRenderedTrackTokens(track, index).tokens;
+            });
+            const rendered = selected.map(track => {
+                const index = this.tracks.indexOf(track);
+                return this.getRenderedTrackTokens(track, index).rendered;
             });
 
             const availableRanks = [...this.composeRanks].reverse(); // lowest to highest
@@ -246,33 +282,35 @@ export default {
                 // Attempt to fit the entire track set into the lowest viable rank
                 for (const rank of availableRanks) {
                     const limits = [rank.melody, rank.harmony1, rank.harmony2, rank.melody].slice(0, numParts);
-                    const fits = tokenized.every((mml, i) => mml.length <= limits[i]);
+                    const fits = rendered.every((mml, i) => mml.length <= limits[i]);
 
                     if (fits) {
-                        const parts = tokenized.map((mml, i) => mml.slice(0, limits[i]));
-                        this.generatedScores.push({ parts, rank: rank.name });
+                        this.generatedScores.push({ parts: rendered.slice(0, numParts), rank: rank.name });
                         break;
                     }
                 }
             } else {
-                // Jab-split mode: split track MML into chunks using lowest possible rank repeatedly
-                const partsContent = tokenized.map(mml => [...mml]);
                 const rank = this.selectedRank;
                 const limits = [rank.melody, rank.harmony1, rank.harmony2, rank.melody].slice(0, numParts);
+                const allSplitTokens = tokenized.map((tokens, i) => {
+                    return this.splitTokensByLimit(tokens, limits[i]);
+                });
 
-                while (true) {
+                const maxChunks = Math.max(...allSplitTokens.map(chunks => chunks.length));
+
+                for (let chunkIndex = 0; chunkIndex < maxChunks; chunkIndex++) {
                     const scoreParts = [];
 
                     for (let i = 0; i < numParts; i++) {
-                        const chunk = partsContent[i]?.splice?.(0, limits[i]) || '';
-                        scoreParts.push(Array.isArray(chunk) ? chunk.join('') : '');
+                        const chunk = allSplitTokens[i]?.[chunkIndex] || [];
+                        const renderedChunk = this.renderTokens(chunk);
+                        scoreParts.push(renderedChunk);
                     }
 
-                    const allEmpty = scoreParts.every(part => part === '');
+                    const allEmpty = scoreParts.every(str => str === '');
                     if (allEmpty) break;
 
-                    this.generatedScores.push( {parts: scoreParts, rank: rank.name });
-
+                    this.generatedScores.push({ parts: scoreParts, rank: rank.name });
                 }
 
             }
