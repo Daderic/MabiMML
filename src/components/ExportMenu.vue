@@ -205,12 +205,13 @@ export default {
 
         },
         trackHasPolyphony(track) {
+            track.notes.sort((a,b) => {return b.left - a.left; });
             for (let i = 0; i < track.notes.length; ++i) {
                 const rightNote = track.notes[i];
                 const leftNote = i + 1 < track.notes.length ? track.notes[i + 1] : null;
                 if (leftNote === null) return false;
                 // Scan from left to right. The next note should not have a left value <= note.end
-                if (rightNote.left < leftNote.left + leftNote.width) {
+                if (rightNote.left < leftNote.left + leftNote.width + 1) {
                     return true;
                 }
             }
