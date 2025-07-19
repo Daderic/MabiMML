@@ -18,7 +18,7 @@
                                         <input type="checkbox" :checked="isSelected(track)"
                                             :disabled="(!isSelected(track) && selectedTracks.length >= maxSelectable) || trackHasPolyphony(track)"
                                             @change="toggleTrack(track)" />
-                                        {{ track.name }} : {{ getRenderedTrackTokens(track, index).rendered.length }} char(s) {{ trackHasPolyphony(track) ? '*' : '' }}
+                                        {{ track.name }} : {{ trackHasPolyphony(track) ? '-' : getRenderedTrackTokens(track, index).rendered.length + ' char(s)'}} {{ trackHasPolyphony(track) ? '*' : '' }}
                                     </label>
                                 </div>
                                 <button class="clear-btn" @click="clearSelection">Clear Selection</button>
@@ -232,6 +232,7 @@ export default {
         },
         getRenderedTrackTokens(track) {
             if (this.tokenCache.has(track)) return this.tokenCache.get(track);
+            if (this.trackHasPolyphony(track)) return { tokens: [], rendered: '' };
             const tokens = this.generateTokens(track)[0];
             const rendered = this.renderTokens(tokens);
             const result = { tokens, rendered };

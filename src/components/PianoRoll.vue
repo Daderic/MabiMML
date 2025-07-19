@@ -9,7 +9,8 @@
             Auto-scroll:
             <input type="checkbox" v-model="autoScrollSong" />
         </label>
-        <ExportMenu :tracks="tracks" :generateTokens="genTokensOutright" :renderTokens="renderTokens" :copyToClipboard="copyToClipboard"/>
+        <ExportMenu :tracks="tracks" :generateTokens="genTokensOutright" :renderTokens="renderTokens"
+            :copyToClipboard="copyToClipboard" />
         <HelpMenu />
         <div v-if="showSuccessNotification" class="copyNotification">
             {{ successNotificationText }}
@@ -109,7 +110,7 @@
 </template>
 
 <script>
-import { ref, onMounted, watchEffect, computed, onBeforeUnmount, watch, nextTick, mergeProps } from 'vue';
+import { ref, onMounted, watchEffect, computed, onBeforeUnmount, watch, nextTick, mergeProps, useCssModule } from 'vue';
 import { Synthetizer, MIDIBuilder, writeMIDIFile, Sequencer, consoleColors, SpessaSynthLogging, MIDI } from "spessasynth_lib";
 import HelpMenu from '@/components/HelpMenu.vue'
 import Tracks from '@/components/Tracks.vue'
@@ -446,8 +447,6 @@ export default {
         };
 
         const handleTrackSelected = (track) => {
-            //console.log(newInstrument);
-            //console.log(track);
             selectedInstrument.value = track.instrument;
             selectedTrackIndex.value = tracks.value.indexOf(track);
             changeInstrument(true);
@@ -568,7 +567,6 @@ export default {
             const granularity = event.altKey ? gridWidth.value / 4 : gridWidth.value;
             const left = Math.round((event.clientX - ruler.value.getBoundingClientRect().left) / granularity / zoomScalar.value) * granularity;
             const enteredTempo = prompt("Enter tempo (BPM):", tempo.value);
-            //console.log(enteredTempo);
             if (enteredTempo !== null && !isNaN(enteredTempo) && enteredTempo !== '') {
                 tempoMarkers.value.push({
                     left: left,
@@ -582,7 +580,6 @@ export default {
 
         const clickTempoMarker = (event, index) => {
             event.preventDefault();
-            //console.log(event);
             if (event.button === 0) {
                 const enteredTempo = prompt("Enter tempo (BPM):", tempoMarkers.value[index].tempo);
                 if (enteredTempo === null)
@@ -654,7 +651,6 @@ export default {
                     tempoIdx++;
                     marker = tempoMarkers.value[tempoIdx];
                 }
-                //console.log(startTempo, marker.left, markerPosition.value);
                 if (marker && marker !== null) {
                     if (markerPosition.value >= marker.left) {
                         tempoIdx++;
@@ -673,68 +669,108 @@ export default {
             }
             clearInterval(markerInterval);
             tick();
-            markerInterval = setInterval(tick, 5);
+            markerInterval = setInterval(tick, 20);
+        }
+
+        const noteLengths = [];
+        const widthCache = {};
+
+        function getUniquePermutations(nums) {
+            nums.sort((a, b) => a - b); // Sort to enable duplicate skipping
+            const used = new Array(nums.length).fill(false);
+            const result = [];
+
+            function backtrack(path) {
+                if (path.length === nums.length) {
+                    result.push([...path]);
+                    return;
+                }
+
+                for (let i = 0; i < nums.length; i++) {
+                    if (used[i]) continue;
+
+                    // Skip duplicate numbers at the same tree depth
+                    if (i > 0 && nums[i] === nums[i - 1] && !used[i - 1]) {
+                        continue;
+                    }
+
+                    used[i] = true;
+                    path.push(nums[i]);
+                    backtrack(path);
+                    path.pop();
+                    used[i] = false;
+                }
+            }
+
+            backtrack([]);
+            return result;
         }
 
         function noteWidthToMML(width) {
+            if (width in widthCache)
+                return widthCache[width];
             let outString = '';
-            //256 pixels is 1 bar (4 beats); 64 pixels is 1 beat in 4/4
             let mmlWidth = width;
-            let noteLengths = [];
-            for (let i = 1; i <= 64; ++i) {
-                if (i < 12 || i % 12 === 0 || i % 16 === 0) {
 
-                    let val1 = Math.round(256 / i * 100);
-                    let val2 = Math.round(256 / i * 150);
+            if (noteLengths.length === 0) {
+                for (let i = 1; i <= 64; ++i) {
+                    let val1 = Math.round(256 / i * 25);
+                    let val2 = Math.round(256 / i * 1.5 * 25);
 
                     noteLengths.push({
                         length: val2,
-                        name: 'L' + i + '.'
+                        name: 'L' + i + '.',
+                        charLength: ('L' + i + '.').length
                     });
                     noteLengths.push({
                         length: val1,
-                        name: 'L' + i
+                        name: 'L' + i,
+                        charLength: ('L' + i).length
                     });
                 }
             }
-            let result = getClosestWidth(noteLengths, mmlWidth);
+
+            let result = getMinCharLengthWidth(noteLengths, mmlWidth);
             outString = result.noteCombination.map(note => note.name).join('&');
+            widthCache[width] = outString;
             return outString;
         }
 
-        function getClosestWidth(notes, targetWidth) {
-            let amount = Math.round(targetWidth * 100);
+        function getMinCharLengthWidth(notes, targetWidth) {
+            let amount = Math.round(targetWidth * 25);
 
             const dp = new Array(amount + 1).fill(Infinity);
-            dp[0] = 0;
+            const prev = new Array(amount + 1).fill(null);
+            const lastNote = new Array(amount + 1).fill(null);
 
-            const usedNotes = new Array(amount + 1).fill(-1);
+            dp[0] = 0;
 
             for (let i = 1; i <= amount; i++) {
                 for (const note of notes) {
                     const noteValue = note.length;
-                    if (i >= noteValue && dp[i - noteValue] + 1 < dp[i]) {
-                        dp[i] = dp[i - noteValue] + 1;
-                        usedNotes[i] = note;
+                    const noteChars = note.charLength;
+                    if (i >= noteValue && dp[i - noteValue] + noteChars < dp[i]) {
+                        dp[i] = dp[i - noteValue] + noteChars;
+                        prev[i] = i - noteValue;
+                        lastNote[i] = note;
                     }
                 }
             }
 
             if (dp[amount] === Infinity) {
-                return { minNotes: null, noteCombination: [] };
+                return { minChars: null, noteCombination: [] };
             }
 
-            const result = []
-            let currentAmount = amount;
-            while (currentAmount > 0) {
-                const note = usedNotes[currentAmount];
-                result.push(note);
-                currentAmount -= note.length;
+            const result = [];
+            let i = amount;
+            while (i > 0) {
+                result.push(lastNote[i]);
+                i = prev[i];
             }
 
-            return { minNotes: dp[amount], noteCombination: result };
-
+            return { minChars: dp[amount], noteCombination: result.reverse() };
         }
+
 
         const stopMarkerAnim = () => {
             clearInterval(markerInterval);
@@ -1537,8 +1573,14 @@ export default {
                     const radius = Math.min(6, ((existingNote.width + 1) / 4) * zoomScalar.value);
                     if (x >= existingNote.left + existingNote.width - resizeHandleWidth && x <= existingNote.left + existingNote.width + 1) {
                         startResize(existingNote, event);
+                        selectedTrackIndex.value = tracks.value.indexOf(existingNote.track);
+                        currentNoteLength.value = existingNote.length;
+                        currentNoteVolume.value = existingNote.volume;
                     } else if (squaredDistToCenter <= radius * radius) {
                         startVolumeChange(existingNote, event);
+                        selectedTrackIndex.value = tracks.value.indexOf(existingNote.track);
+                        currentNoteLength.value = existingNote.length;
+                        currentNoteVolume.value = existingNote.volume;
                     } else {
                         startDrag(existingNote, event);
                     }
@@ -1650,454 +1692,491 @@ export default {
             });
         }
 
-        function placeOptimalLengthTokens(tokens) {
-            //const noteLikeTokens = tokens.filter(t => t.type === 'NOTE' || t.type === 'REST' || t.type === 'TIE');
+        function OxLxTokensDP(tokens) {
+            const n = tokens.length;
 
-            const segments = [];
-            for (let i = 0; i < tokens.length; ) {
-                const t = tokens[i];
-                if (t.type === 'REST' || t.type === 'NOTE') {
-                    const segment = [t];
-                    i++;
-                    while (i < tokens.length && tokens[i].type === 'TIE') {
-                        segment.push(tokens[i]);
-                        i++;
-                        if (i < tokens.length && tokens[i].type === t.type) {
-                            segment.push(tokens[i]);
-                            i++;
+            const lengths = new Set(tokens.filter(t => t.type !== 'TEMPO').map(t => t.lengthString));
+            lengths.add('4');
+            const octaves = new Set(tokens.filter(t => t.type === 'NOTE').map(t => t.octave));
+            octaves.add(4);
+
+            const dp = {};
+            const action = {};
+
+            function getDP(i, len, oct) {
+                return dp[i]?.[len]?.[oct] ?? 0;
+            }
+
+            function setDP(i, len, oct, val, act) {
+                if (!dp[i]) dp[i] = {};
+                if (!dp[i][len]) dp[i][len] = {};
+                dp[i][len][oct] = val;
+
+                if (!action[i]) action[i] = {};
+                if (!action[i][len]) action[i][len] = {};
+                action[i][len][oct] = act;
+            }
+
+            // Base case
+            for (const len of lengths) {
+                for (const oct of octaves) {
+                    setDP(n, len, oct, 0, null);
+                }
+            }
+
+            // Bottom-up DP
+            for (let i = n - 1; i >= 0; i--) {
+                const token = tokens[i];
+                for (const len of lengths) {
+                    for (const oct of octaves) {
+                        let best = Infinity;
+                        let bestAct = null;
+
+                        if (token.type === 'REST') {
+                            const tokenLen = token.lengthString;      // e.g. "4" or "8"
+                            const dotted = token.dotted;            // boolean
+                            const reprBase = token.name;               // always 'r'
+
+                            // 1) Implicit
+                            if (tokenLen === len) {
+                                const implicit = reprBase.length + getDP(i + 1, len, oct);
+                                best = implicit;
+                                bestAct = { type: 'implicitRest', newLen: len };
+                            }
+
+                            // 2) Switch length
+                            const sw = `L${tokenLen}${reprBase}`.length + getDP(i + 1, tokenLen, oct);
+                            if (!best || sw < best) {
+                                best = sw;
+                                bestAct = { type: 'switchRest', newLen: tokenLen };
+                            }
+
+                            // 3) Explicit
+                            const ex = reprBase.length + (dotted && tokenLen.replace('.', '') === len ? 1 : tokenLen.length) + getDP(i + 1, len, oct);
+                            if (!best || ex < best) {
+                                best = ex;
+                                bestAct = { type: 'explicitRest', newLen: len };
+                            }
+                        } else if (token.type === 'NOTE') {
+                            const tokenLen = token.lengthString;     // e.g. "4" or "8."
+                            const baseLen = tokenLen.replace('.', '');
+                            const dotted = token.dotted;           // true/false
+                            const tokenOct = token.octave;
+                            const name = token.name;             // e.g. "c"
+                            const pitch = token.pitch;            // e.g. 60
+
+                            // Gather all candidate spellings:
+                            const spellings = [];
+
+                            // 1) Implicit (only if length matches)
+                            if (tokenLen === len) {
+                                spellings.push({ str: name, nextLen: len, spellingName: name });
+                            }
+
+                            // 2) Switch length + name
+                            spellings.push({ str: `L${tokenLen}${name}`, nextLen: tokenLen, spellingName: `${name}` });
+
+                            // 3) Explicit name+length
+                            spellings.push({ str: name + (dotted && baseLen === len ? '.' : tokenLen), nextLen: len, spellingName: name });
+
+                            // 4) Implicit with pitch
+                            if (tokenLen === len) {
+                                spellings.push({ str: `N${pitch}`, nextLen: len, spellingName: `N${pitch}` });
+                            }
+
+                            // 5) Switch with pitch OR exclusive with pitch
+                            spellings.push({ str: `L${tokenLen}N${pitch}`, nextLen: tokenLen, spellingName: `N${pitch}` });
+
+                            // Now try each spelling in turn, combining with octave options:
+                            for (let { str: rep, nextLen, spellingName } of spellings) {
+                                // A) Implicit octave
+                                const isPitchNotation = rep.includes('N');
+                                if (isPitchNotation || tokenOct === oct) {
+                                    const cand = rep.length + getDP(i + 1, nextLen, oct);
+                                    if (!best || cand < best) {
+                                        best = cand;
+                                        bestAct = { type: 'spell', spelling: rep, newLen: nextLen, newOct: oct, spellingName: spellingName };
+                                    }
+                                }
+
+                                if (isPitchNotation) continue;
+
+                                // B) Relative octave (if within ±2)
+                                const diff = tokenOct - oct;
+                                if (Math.abs(diff) <= 2 && diff !== 0) {
+                                    const relPrefix = (diff > 0 ? '>' : '<').repeat(Math.abs(diff));
+                                    const rel = relPrefix.length + rep.length + getDP(i + 1, nextLen, tokenOct);
+                                    if (!best || rel < best) {
+                                        best = rel;
+                                        bestAct = { type: 'spell+relOct', spelling: rep, newLen: nextLen, shift: diff, newOct: tokenOct, spellingName: spellingName };
+                                    }
+                                }
+
+                                // C) Absolute octave
+                                const abs = `o${tokenOct}`.length + rep.length + getDP(i + 1, nextLen, tokenOct);
+                                if (!best || abs < best) {
+                                    best = abs;
+                                    bestAct = { type: 'spell+absOct', spelling: rep, newLen: nextLen, newOct: tokenOct, spellingName: spellingName };
+                                }
+
+                            }
+
                         }
-                    }
-                    segment.reverse();
-                    segments.push(segment);
-                } else {
-                    i++;
-                }
-            }
 
-            const n = segments.length;
-
-            // Dynamic programming tables
-            const dpCosts = Array.from({ length: n + 1 }, () => new Map());
-            const dpBackpointer = Array.from({ length: n + 1 }, () => new Map());
-
-            dpCosts[0].set(4, 0);  // Start with default length = 4 and cost = 0
-
-            function extractLengthInfo(segment) {
-                const token = segment[0];
-                const length = token.dotted ? 1.5 * 256 / token.length : 256 / token.length;
-                const dotted = token.dotted ? 1 : 0;
-                const charLen = (token.type === 'REST') ? 1 : token.name.length;
-                return { length, dotted, charLen };
-            }
-
-            for (let i = 0; i < n; ++i) {
-                const { length, dotted, charLen } = extractLengthInfo(segments[i]);
-
-                for (const [currentDefault, accumulatedCost] of dpCosts[i]) {
-                    const matchesDefault = length === currentDefault;
-                    // Option A: keep current default
-                    let costToAdd = charLen;
-                    if (!matchesDefault) {
-                        costToAdd += String(length).length + dotted;
-                    }
-
-                    let newCost = accumulatedCost + costToAdd;
-
-                    if (!dpCosts[i + 1].has(currentDefault) || newCost < dpCosts[i + 1].get(currentDefault)) {
-                        dpCosts[i + 1].set(currentDefault, newCost);
-                        dpBackpointer[i + 1].set(currentDefault, [currentDefault, 'keep']);
-                    }
-
-                    // Option B: change default
-                    let costWithChange = accumulatedCost + charLen + String(length).length + 1 + dotted;
-
-                    if (!dpCosts[i + 1].has(length) || costWithChange < dpCosts[i + 1].get(length)) {
-                        dpCosts[i + 1].set(length, costWithChange);
-                        dpBackpointer[i + 1].set(length, [currentDefault, 'change']);
+                        setDP(i, len, oct, best, bestAct);
                     }
                 }
             }
 
-            // Find the minimal cost at the final position
-            let finalDefault = null;
-            let minimalTotalCost = Infinity;
-            for (const [defaultLength, cost] of dpCosts[n]) {
-                if (cost < minimalTotalCost) {
-                    minimalTotalCost = cost;
-                    finalDefault = defaultLength;
+            // Rebuild token list
+            let implicitLen = '4';    // default MML length
+            let implicitOct = 4;      // default octave
+            const output = [];
+            for (let i = 0; i < tokens.length; i++) {
+                const token = tokens[i];
+                let a = action[i][implicitLen][implicitOct];
+
+                // 1) Handle TEMPO tokens
+                if (token.type === 'TEMPO') {
+                    output.push(token);
+                    continue;
                 }
+
+                // 2) Handle REST tokens
+                if (token.type === 'REST') {
+                    switch (a.type) {
+                        case 'implicitRest':
+                            // just r or r.
+                            output.push(token);
+                            break;
+
+                        case 'switchRest':
+                            // emit new LENGTH then rest
+                            output.push({
+                                type: 'LENGTH',
+                                start: token.start,
+                                lengthString: a.newLen,
+                                dotted: token.dotted,
+                                length: Number(a.newLen)
+                            });
+                            implicitLen = a.newLen;
+                            output.push(token);
+                            break;
+
+                        case 'explicitRest':
+                            // rest already carries its own lengthString
+                            output.push(token);
+                            break;
+
+                        default:
+                            // fallback
+                            output.push(token);
+                    }
+                    continue;
+                }
+
+                // 3) Handle NOTE tokens
+                //    First insert any OCTAVE control
+                if (a.newOct !== undefined && a.type !== 'spell') {
+                    let text;
+                    if (a.type === 'spell+absOct') {
+                        text = `o${a.newOct}`;
+                    } else if (a.type === 'spell+relOct') {
+                        const shift = a.shift;
+                        text = (shift > 0 ? '>' : '<').repeat(Math.abs(shift));
+                    }
+
+                    output.push({
+                        type: 'OCTAVE',
+                        start: token.start,
+                        text: text
+                    });
+                    implicitOct = a.newOct;
+                }
+
+                //    Next insert any LENGTH control
+                if (a.newLen !== undefined && a.newLen !== implicitLen) {
+                    const dotted = a.newLen.endsWith('.');
+                    output.push({
+                        type: 'LENGTH',
+                        start: token.start,
+                        lengthString: a.newLen,
+                        dotted: dotted,
+                        length: Number(a.newLen)
+                    });
+                    implicitLen = a.newLen;
+                }
+
+                //    Finally emit the NOTE with overridden name
+                output.push({
+                    ...token,
+                    name: a.spellingName
+                });
             }
 
-            // Backtrack to reconstruct optimized sequence
-            const reconstructed = [];
-            let currentDefault = finalDefault;
-            let i = n;
+            return output;
 
-            while (i > 0) {
-                const [prevDefault, action] = dpBackpointer[i].get(currentDefault);
-                const segment = segments[i - 1];
-
-                for (const tok of segment) {
-                    reconstructed.push(tok);
-                }
-
-                if (action === 'change') {
-                    reconstructed.push({ type: 'LENGTH', length: currentDefault, dotted: segment[0].dotted, start: segment[segment.length - 1].start });
-                }
-
-                currentDefault = prevDefault;
-                i--;
-            }
-
-            reconstructed.reverse();
-
-            return reconstructed;
         }
 
-        const genTokensOutright = (singleTrack=null) => {
-            // Should split this per track.
-            const tracksToConsider = [singleTrack] || tracks.value;
-            if (tracksToConsider[0] === null || tracksToConsider === 0)
-                return;
-            const allTokens = [];
-            for (const track of tracksToConsider) {
-                let tokens = [];
-                for (const note of track.notes) {
-                    const noteLengths = noteWidthToMML(note.width + 1).split('&');
-                    const noteName = note.name.slice(0, note.name.length - 1).toLowerCase();
-                    let left_augment = 0;
-                    for (let i = 0; i < noteLengths.length; ++i) {
-                        const dotted = noteLengths[i].endsWith('.');
-                        let length = Math.floor(256 / Number(noteLengths[i].slice(1, noteLengths[i].length)));
-                        if (dotted)
-                            length = Math.floor(1.5 * length);
-                        tokens.push({
-                            type: 'NOTE',
-                            pitch: note.pitch - 12,
-                            volume: note.volume,
-                            length: length,
-                            start: note.left + left_augment,
-                            octave: Math.floor((note.pitch - 12) / 12),
-                            name: noteName,
-                            dotted: dotted
-                        });
-                        left_augment += length;
-                        if (i !== noteLengths.length - 1) {
-                            tokens.push({
-                                type: 'TIE',
-                                pitch: note.pitch - 12,
-                                start: note.left + left_augment
-                            });
-                        }
-                    }
-                }
-
-                tokens.sort((a, b) => {
-                    return a.start - b.start;
-                });
-
-                // Add rests between notes
-                for (let i = -1; i < tokens.length - 1; ++i) {
-                    const note1 = i > -1 ? tokens[i] : {
-                            type: 'NOTE',
-                            length: 0,
-                            start: 0
-                        };
-                    const note2 = tokens[i + 1];
-                    if (note1.type != 'NOTE' || note2.type != 'NOTE')
-                        continue;
-                    const gap = note2.start - (note1.start + note1.length);
-                    if (gap > 0) {
-                        const restLengths = noteWidthToMML(gap).split('&');
-                        let left_augment = 0;
-                        for (let j = 0; j < restLengths.length; ++j) {
-                            const dotted = restLengths[j].endsWith('.');
-                            let restLength = Math.floor(256 / Number(restLengths[j].slice(1, restLengths[j].length)));
-                            if (dotted)
-                                restLength = Math.floor(1.5 * restLength);
-                            tokens.splice(i + j + 1, 0, {
-                                type: "REST",
-                                length: restLength,
-                                start: note1.start + note1.length + left_augment,
-                                dotted: dotted
-                            });
-                        }
-                        ++i;
-                    }
-                }
-
-                // Run length optimization
-                tokens = placeOptimalLengthTokens(tokens);
-
-                // Run octave insertion/optimization
-                let octaveState = 4;
-                let lengthState = 4;
-                let dottedState = false;
-                for (let i = 0; i < tokens.length; i++) {
-                    const token = tokens[i];
-                    if (token.type === 'LENGTH') {
-                        lengthState = token.length;
-                        dottedState = token.dotted;
-                        continue;
-                    }
-                    if (token.type !== 'NOTE' || token.name.startsWith('n'))
-                        continue;
-                    let octaveDifference = token.octave - octaveState;
-                    let octaveDistance = Math.abs(octaveDifference);
-                    if (octaveDistance === 1 && !(tokens[i + 1] && tokens[i + 1].octave !== octaveState)) {
-                        if (octaveDifference < 0 && token.name === 'b') {
-                            token.name = 'c-';
-                            token.octave += 1;
-                            octaveDifference = 0;
-                            octaveDistance = 0;
-                        } else if (octaveDifference > 0 && token.name === 'c') {
-                            token.name = 'b#';
-                            token.octave -= 1;
-                            octaveDifference = 0;
-                            octaveDistance = 0;
-                        }
-                    }
-                    octaveState = token.octave;
-                    let octaveText;
-                    if (octaveDistance > 2) {
-                        octaveText = `o${token.octave}`;
-                    } else {
-                        octaveText = `${octaveDifference < 0 ? '<' : '>'}`.repeat(octaveDistance);
-                    }
-                    if (tokens[i + 1] && tokens[i + 2] && tokens[i + 1].type === 'NOTE' && tokens[i + 2].type === 'NOTE' && tokens[i + 1].octave !== token.octave && tokens[i + 2].octave === token.octave) {
-                        const token2 = tokens[i + 1];
-                        const token2Length = token2.dotted ? 1.5 * 256 / token2.length : 256 / token2.length;
-                        if (Math.abs(token.pitch - token2.pitch) === 1) {
-                            const difference = token.pitch - token2.pitch;
-                            // if difference is negative, add a sharp (#), else add a flat (-)
-                            token2.octave += difference;
-                            if (difference < 0) {
-                                token2.name = token.name + '#';
-                            } else {
-                                token2.name = token.name + '-';
-                            }
-                            i++;
-                            continue;
-                        } else if (token2.name.length > 1 && token2Length === lengthState && token2.dotted === dottedState) {
-                            token2.name = `n${token2.pitch}`;
-                        }
-                    }
-                    if (octaveText === '')
-                        continue;
-                    tokens.splice(i, 0, {
-                        type: "OCTAVE",
-                        start: token.start,
-                        text: octaveText
+        const getTrackTokens = (track) => {
+            let tokens = [];
+            // Add Note tokens to list
+            for (const note of track.notes) {
+                const noteLengths = noteWidthToMML(note.width + 1).split('&');
+                const noteName = note.name.slice(0, note.name.length - 1).toLowerCase();
+                let left_augment = 0;
+                for (let i = 0; i < noteLengths.length; ++i) {
+                    const dotted = noteLengths[i].endsWith('.');
+                    let length = 256 / Number(noteLengths[i].slice(1, noteLengths[i].length)); // This represents the raw number that is the length of the note. This is not MML notation.
+                    if (dotted)
+                        length = 1.5 * length;
+                    tokens.push({
+                        type: 'NOTE',
+                        pitch: note.pitch - 12,
+                        volume: note.volume,
+                        length: length,
+                        lengthString: noteLengths[i].slice(1, noteLengths[i].length), // This IS MML REPRESENTATION
+                        start: note.left + left_augment,
+                        octave: Math.floor((note.pitch - 12) / 12),
+                        name: `${i > 0 ? '&' : ''}${noteName}`, // Start the note name with an '&' if it is tied to the previous note
+                        dotted: dotted,
+                        tiedToPreviousNote: (i > 0)
                     });
-                    i++;
+                    left_augment += length;
                 }
+            }
+            // Add tempo markers before rests
+            // Remove any duplicate tempo markers and push only relevant ones
+            const latestTempoMarkers = new Map();
 
-                // Run Volume insertion
-                let volumeState = 8;
-                for (let i = 0; i < tokens.length; ++i) {
-                    const token = tokens[i];
-                    if (token.type !== 'NOTE' || token.volume === volumeState)
-                        continue;
-                    volumeState = token.volume;
-                    tokens.splice(i, 0, {
+            if (tempo.value !== 120) {
+                latestTempoMarkers.set(0, {
+                    parentTrack: track,
+                    tempo: tempo.value,
+                    left: 0
+                });
+            }
+
+            for (const marker of tempoMarkers.value) {
+                if (marker.parentTrack === track) {
+                    latestTempoMarkers.set(marker.left, marker);
+                }
+            }
+
+            for (const marker of latestTempoMarkers.values()) {
+                tokens.push({
+                    type: 'TEMPO',
+                    tempo: marker.tempo,
+                    start: marker.left,
+                    length: 0
+                });
+            }
+
+            tokens.sort((a, b) => {
+                if (a.start - b.start === 0) {
+                    if (a.type === 'TEMPO')
+                        return -1
+                }
+                return a.start - b.start;
+            });
+
+            // Add Rests between notes and tempo markers
+            for (let i = -1; i < tokens.length - 1; ++i) {
+                const token1 = i > -1 ? tokens[i] : {
+                    type: 'TEMPO',
+                    length: 0,
+                    start: 0
+                };
+                const token2 = tokens[i + 1];
+                const gap = Math.max(0, token2.start - (token1.start + token1.length));
+                if (gap > 0) {
+                    const restLengths = noteWidthToMML(gap).split('&');
+                    let left_augment = 0;
+                    for (let j = 0; j < restLengths.length; ++j) {
+                        const dotted = restLengths[j].endsWith('.');
+                        let restLength = 256 / Number(restLengths[j].slice(1, restLengths[j].length));
+                        if (dotted)
+                            restLength = 1.5 * restLength;
+                        tokens.splice(i + j + 1, 0, {
+                            type: "REST",
+                            length: restLength,
+                            lengthString: restLengths[j].slice(1, restLengths[j].length), // This IS MML REPRESENTATION
+                            start: token1.start + token1.length + left_augment,
+                            dotted: dotted,
+                            name: "r"
+                        });
+                        left_augment += restLength;
+                    }
+                    ++i;
+                }
+            }
+            // Run dynamic programming algorithm to place length tokens in proper spots (ignoring tempo tokens).
+            const tempoTokens = tokens.filter(t => t.type === 'TEMPO');
+            const dpTokens = tokens.filter(t => t.type !== 'TEMPO');
+
+            const optimizedTokens = OxLxTokensDP(dpTokens);
+
+            // Put in Volumes
+            let implicitVolume = 8;
+            const newVolumeTokens = [];
+            for (let i = 0; i < tokens.length; i++) {
+                const token = tokens[i];
+                if (token.type !== 'NOTE')
+                    continue;
+                const tokenVolume = token.volume;
+                if (tokenVolume !== implicitVolume) {
+                    newVolumeTokens.push({
                         type: "VOLUME",
                         start: token.start,
-                        volume: volumeState
-                    });
-                    i++;
-                }
-
-                // Save tempo markers for the end, after doing rests, then lengths, then octaves, then volumes
-                // Remove any duplicate tempo markers and push only relevant ones
-                const latestTempoMarkers = new Map();
-
-                if (tempo.value !== 120) {
-                    latestTempoMarkers.set(0, {
-                        parentTrack: track,
-                        tempo: tempo.value,
-                        left: 0
+                        volume: token.volume
                     });
                 }
-
-                for (const marker of tempoMarkers.value) {
-                    if (marker.parentTrack === track) {
-                        latestTempoMarkers.set(marker.left, marker);
-                    }
-                }
-
-                for (const marker of latestTempoMarkers.values()) {
-                    tokens.push({
-                        type: 'TEMPO',
-                        tempo: marker.tempo,
-                        start: marker.left
-                    });
-                }
-
-                tokens.sort((a, b) => {
-                    if (a.start - b.start === 0) {
-                        if (a.type === 'TEMPO')
-                            return -1
-                    }
-                    return a.start - b.start;
-                });
-
-                //console.log(tokens);
-                //console.log(renderTokens(tokens));
-                allTokens.push(tokens);
+                implicitVolume = tokenVolume;
             }
-            return allTokens;
+
+            // Reintegrate tokens
+            tokens = [...newVolumeTokens, ...tempoTokens, ...optimizedTokens];
+            tokens.sort((a, b) => {
+                if (a.start !== b.start) return a.start - b.start;
+                if (a.type === 'TEMPO' && b.type !== 'TEMPO') return -1;
+                if (b.type === 'TEMPO' && a.type !== 'TEMPO') return 1;
+                if (a.type === 'LENGTH' && b.type !== 'LENGTH') return -1;
+                if (b.type === 'LENGTH' && a.type !== 'LENGTH') return 1;
+                if (a.type === 'VOLUME' && b.type !== 'VOLUME') return -1;
+                if (b.type === 'VOLUME' && a.type !== 'VOLUME') return 1;
+                if (a.type === 'OCTAVE' && b.type !== 'OCTAVE') return -1;
+                if (b.type === 'OCTAVE' && a.type !== 'OCTAVE') return 1;
+                return 0;
+            });
+
+            return tokens;
+
         };
 
-        function renderTokens(tokenList) {
+        const renderTrackTokens = (tokenList) => {
             let output = [];
             let activeDefault = 4;
             let activeDotted = false;
+            let notePositions = [];  // Track pitch info per position
 
             if (!tokenList) {
                 return;
             }
 
             for (const tok of tokenList) {
+                let rendered = '';
                 if (tok.type === 'LENGTH') {
                     activeDefault = tok.length;
                     activeDotted = tok.dotted;
-                    output.push(`L${activeDefault}${tok.dotted ? '.' : ''}`);
-                } else if (tok.type === 'TIE') {
-                    output.push('&');
+                    rendered = `L${activeDefault}${tok.dotted ? '.' : ''}`;
                 } else if (tok.type === 'OCTAVE') {
-                    output.push(tok.text);
+                    rendered = tok.text;
                 } else if (tok.type === 'VOLUME') {
-                    output.push(`V${tok.volume}`);
+                    rendered = `V${tok.volume}`;
                 } else if (tok.type === 'REST') {
                     const length = tok.dotted ? 1.5 * 256 / tok.length : 256 / tok.length;
                     if (length === activeDefault && tok.dotted === activeDotted) {
-                        output.push('r');
+                        rendered = 'r';
                     } else if (length === activeDefault && tok.dotted) {
-                        output.push('r.');
+                        rendered = 'r.';
                     } else {
-                        output.push(`r${length}${tok.dotted ? '.' : ''}`);
+                        rendered = `r${length}${tok.dotted ? '.' : ''}`;
                     }
                 } else if (tok.type === 'NOTE') {
                     const length = tok.dotted ? 1.5 * 256 / tok.length : 256 / tok.length;
-                    if (length === activeDefault && tok.dotted === activeDotted) {
-                        output.push(tok.name);
+                    if (length === activeDefault && tok.dotted === activeDotted || tok.name.includes('N')) {
+                        rendered = tok.name;
                     } else if (length === activeDefault && tok.dotted) {
-                        output.push(tok.name, '.')
+                        rendered = `${tok.name}.`;
                     } else {
-                        output.push(`${tok.name}${length}${tok.dotted ? '.' : ''}`);
+                        rendered = `${tok.name}${length}${tok.dotted ? '.' : ''}`;
                     }
+                    // Mark this position for pitch tracking
+                    notePositions.push({
+                        index: output.join('').length, // start position in the final string
+                        pitch: tok.pitch
+                    });
                 } else if (tok.type === 'TEMPO') {
-                    output.push(`T${tok.tempo}`);
+                    rendered = `T${tok.tempo}`;
                 }
+
+                if (rendered)
+                    output.push(rendered);
             }
 
-            return output.join('');
-        }
-
-
-        const genMML = () => {
-            for (const track of tracks.value) {
-                track.notes.sort((a, b) => {
-                    if (a.left === b.left) {
-                        return a.top - b.top;
-                    }
-                    return a.left - b.left;
-                });
-                track.notes.reverse();
-            }
-            let outString = 'T' + tempo.value;
-            let audibleTracks = [];
-
-            for (const track of tracks.value) {
-                if (!track.isMuted) {
-                    audibleTracks.push(track);
-                }
-            }
-
-            for (const track of audibleTracks) {
-                // If there exists two notes whose values overlap within the same track, then we cannot and will not generate an MML.
-                for (let i = 0; i < track.notes.length; ++i) {
-                    let rightNote = track.notes[i];
-                    let leftNote = i + 1 < track.notes.length ? track.notes[i + 1] : null;
-                    if (leftNote === null) break;
-                    // Scan from left to right. The next note should not have a left value <= note.end
-                    if (rightNote.left <= leftNote.left + leftNote.width) {
-                        console.log("Could Not Gen MML");
-                        showFailureMessage(`Failed to copy MML to clipboard! Track '${track.name}'' has overlapping notes!`);
-                        return null;
-                    }
-                }
-            }
-
-            if (0 <= audibleTracks.length && audibleTracks.length <= 4) {
-                audibleTracks.sort((a, b) => {return b.notes.length - a.notes.length}); // sort the largest track to the top
-                //console.log(audibleTracks);
-                for (const track of audibleTracks) {
-                    let prevNoteEnd = 0;
-                    // Make a list of all tempo changes for this track
-                    let trackTempoMarkers = [];
-                    for (const tempoMarker of tempoMarkers.value) {
-                        if (tempoMarker.parentTrack === track) {
-                            trackTempoMarkers.push(tempoMarker);
-                        }
-                    }
-                    // We now need to "insert" the tempoMarkers at the appropriate "left" values.
-                    // This would mean whenever we have a note at left position l, we would place the tempo change before the note if it had the same l.
-                    // Similarly, if there were some gap between notes, we would put the tempo change wherever it belonged in that gap.
-                    // Since our list of tempomarkers is sorted, we can pop (Array.shift()) the tempomarkers from our list as we go.
-
-                    let notables = [...trackTempoMarkers, ...track.notes.slice().reverse()];
-                    notables.sort((a, b) => {return a.left - b.left});
-
-                    for (const note of notables) {
-                        if (note.left >= prevNoteEnd + 4) {
-                            // console.log('Adding Rest...', note.left, prevNoteEnd + 4);
-                            let gap = note.left - prevNoteEnd;
-                            let restStr = noteWidthToMML(gap);
-                            restStr = restStr.replaceAll('L', 'R');
-                            outString += restStr;
-                        }
-                        //console.log(note.width);
-                        if (!note.width) { // This means that it was a tempo marker and not a note.
-                            outString += 'T' + note.tempo;
-                            prevNoteEnd = note.left;
-                        } else {
-                            let noteStr = noteWidthToMML(note.width + 1);
-                            if (noteStr.includes('&')) {
-                                let k = noteStr.split('&');
-                                for (let i = 0; i < k.length; ++i) {
-                                    outString += k[i] + 'V' + note.volume + 'N' + (note.pitch - 12) + (i === k.length - 1 ? '' : '&');
-                                }
-                            } else {
-                                outString += noteWidthToMML(note.width + 1) + 'V' + note.volume + 'N' + (note.pitch - 12);
-                            }
-                            prevNoteEnd = note.left + note.width + 1;
-                        }
-                    }
-                    outString += ',';
-                }
-            } else {
-                console.log("Could Not Gen MML");
-                showFailureMessage('Failed to copy MML to clipboard! Too many tracks visible!');
-                return null;
-            }
-            outString = outString.slice(0, -1);
-            // Now we condense the output;
-            let outTracks = outString.split(',');
-            let newTracks = [];
-            for (const track of outTracks) {
-                let tokens = tokenizeMML(track);
-                let simplifiedTokens = simplifyMML(tokens);
-                let simplifiedMML = stringifyMML(simplifiedTokens);
-                newTracks.push(simplifiedMML);
-            }
-
-            outString = `MML@${newTracks.join(',')};`;
-
-            // Log output to console and copy it to the clipboard
-            console.log(outString);
-            copyToClipboard(outString);
+            let outputText = output.join('');
+            return { outputText, notePositions };
         };
+
+        const compressMMLText = (outputText, notePositions) => {
+            let transformed = outputText;
+
+            // transformed = transformed.replace(
+            //     /([<>]+)([a-gA-G][#+-]?)((?:r\d*)*)(L\d+)?(V\d+)?([<>]+)/g,
+            //     (match, relOct1, note, rest, length2, vol, relOct2, offset) => {
+            //         if (relOct1.length !== relOct2.length) return match;
+            //         if (relOct1.includes('>') && !relOct2.includes('<')) return match;
+            //         if (relOct2.includes('>') && !relOct1.includes('<')) return match;
+            //         if (relOct1 === '<' && note === 'b') return match;
+            //         if (relOct1 === '>' && note === 'c') return match;
+            //         let result = '';
+            //         const pitch = notePositions.find(item => item.index === offset + 1)?.pitch ?? '??';
+
+            //         result += `N${pitch}`;
+            //         if (rest) result += rest;
+            //         if (length2) result += length2;
+            //         if (vol) result += vol;
+            //         return result;
+            //     }
+            // );
+
+
+            transformed = transformed.replace(
+                /<b(\d+)?(\.)?(r\d*)?(L\d+)?(V\d+)?>/g,
+                (_, bNum, dot, rGroup, lGroup, vGroup) => {
+                    return 'c-' +
+                        (bNum || '') +
+                        (dot || '') +
+                        (rGroup || '') +
+                        (lGroup || '') +
+                        (vGroup || '');
+                }
+            );
+
+            transformed = transformed.replace(
+                />c(\d+)?(\.)?(r\d*)?(L\d+)?(V\d+)?</g,
+                (_, cNum, dot, rGroup, lGroup, vGroup) => {
+                    return 'b+' +
+                        (cNum || '') +
+                        (dot || '') +
+                        (rGroup || '') +
+                        (lGroup || '') +
+                        (vGroup || '');
+                }
+            );
+
+
+            return transformed;
+        };
+
+
+        const genTokensOutright = (singleTrack = null) => {
+            // Should split this per track.
+            const tracksToConsider = [singleTrack] || tracks.value;
+            if (tracksToConsider[0] === null || tracksToConsider === 0)
+                return;
+            const allTokens = [];
+            for (const track of tracksToConsider) {
+                allTokens.push(getTrackTokens(track));
+            }
+            return allTokens;
+        };
+
+        function renderTokens(tokenList) {
+            const { outputText, notePositions } = renderTrackTokens(tokenList);
+            const compressedString = compressMMLText(outputText, notePositions);
+            return compressedString;
+        }
 
         function getEnharmonicEquivalent(note) {
             if (note.length === 1)
@@ -2135,131 +2214,9 @@ export default {
             }
 
             // Sort tokens by their original index in the string
-            tokens.sort((a, b) => {return a.index - b.index});
+            tokens.sort((a, b) => { return a.index - b.index });
 
             return tokens;
-        }
-
-        function simplifyMML(tokenList) {
-            // This is NOT optimal, but it works.
-            let newTokenList = JSON.parse(JSON.stringify(tokenList));
-            let totalPasses = 10;
-
-            for (let pass = 0; pass < totalPasses; ++pass) {
-                let octave = 4;
-                let length = '4';
-                let tempo = '120';
-                let volume = '8';
-
-                for (let i = 0; i < newTokenList.length; ++i) {
-                    let token = newTokenList[i];
-                    if (token.type === 'LENGTH') {
-                        let tokenLength = token.value.split('L')[1];
-                        if (tokenLength !== length) {
-                            length = tokenLength;
-                        } else {
-                            newTokenList.splice(i, 1);
-                            i--;
-                        }
-                    } else if (token.type === 'VOLUME') {
-                        let tokenVolume = token.value.split('V')[1];
-                        if (tokenVolume !== volume) {
-                            volume = tokenVolume;
-                        } else {
-                            newTokenList.splice(i, 1);
-                            i--;
-                        }
-                    } else if (token.type === 'TEMPO') {
-                        let tokenTempo = token.value.split('T')[1]; // BUG: THERE IS A BUG WHERE HAVING A T150 IN TRACK 1 AND A T120 IN TRACK 2 AFTER THE MARKER IN TRACK 1 WILL CAUSE TRACK 2 TO DELETE ITS T120 BECAUSE IT DOESNT SEE/RECOGNIZE THAT THE TEMPO WAS CHANGED IN TRACK 1 BEFORE THIS TRACK
-                        if (tokenTempo !== tempo) {
-                            tempo = tokenTempo;
-                        } else {
-                            newTokenList.splice(i, 1);
-                            i--;
-                        }
-                    } else if (token.type === 'REST') {
-                        let restLength = token.value.split('R')[1];
-                        if (restLength === length) {
-                            token.value = 'R';
-                        }
-                    } else if (token.type === 'NOTE') {
-                        if (!token.value.includes('N'))
-                            continue;
-                        let notePitch = Number(token.value.split('N')[1]);
-                        let noteOctave = Math.floor(notePitch / 12);
-                        let noteKey = noteNames[notePitch - 12 * noteOctave];
-                        if (noteOctave !== octave) {
-                            let diff = noteOctave - octave;  // Positive diff means noteOctave is higher.
-                            let octaveChanges = [];
-
-                            if (Math.abs(diff) < 3) {
-                                // Insert `>` or `<` for smaller octave differences.
-                                let symbol = diff > 0 ? '>' : '<';
-                                for (let j = 0; j < Math.abs(diff); ++j) {
-                                    octaveChanges.push({ type: 'OCTAVE', value: symbol, index: token.index + j });
-                                }
-                            } else {
-                                // Use absolute octave changes for larger octave differences.
-                                octaveChanges = [{ type: 'OCTAVE', value: 'O' + noteOctave, index: token.index }];
-                            }
-                            // console.log(octaveChanges);
-                            // Now splice in the octave changes and the note key.
-                            newTokenList.splice(i, 1, ...octaveChanges, { type: 'NOTE', value: noteKey, index: token.index + octaveChanges.length });
-
-                            octave = noteOctave; // Update current octave to the new one.
-                        } else {
-                            // No octave change, just update the note value.
-                            token.value = noteKey;
-                        }
-                    }
-                }
-
-                // Now we simplify lengths
-                let lengthIndex = 0;
-                for (let i = 0; i < newTokenList.length; ++i) {
-                    let token = newTokenList[i];
-                    let prevToken = i > 0 ? newTokenList[i - 1] : null;
-                    if (token.type === 'LENGTH') {
-                        // Count until we hit the next length token or the end of the list.
-                        let noteCount = 0;
-                        let noteIndexes = [];
-                        for (let j = i + 1; j < newTokenList.length; ++j) {
-                            let token2 = newTokenList[j];
-                            // if note/rest has no postfix number, then we add it to the count
-                            if ((token2.type === 'NOTE' || token2.type === 'REST') && token2.value.replace(/[A-GRN][#]?/g, '') === '') {
-                                noteCount++;
-                                noteIndexes.push(j);
-                            } else if (token2.type === 'LENGTH') {
-                                break;
-                            }
-                        }
-
-                        if ((prevToken && prevToken.type === 'TIE') || noteCount * token.value.length <= token.value.length + noteCount) {
-                            // remove this length tag and put the length on the notes
-                            // console.log(noteCount);
-                            for (const noteIndex of noteIndexes) {
-                                newTokenList[noteIndex].value = newTokenList[noteIndex].value + token.value.split('L')[1];
-                            }
-                            newTokenList.splice(i, 1);
-                        }
-
-                    } else if (token.type === 'TEMPO') {
-                        // Look for any duplicate tempos that have no notes or rests between them.
-                    } else if (token.type === 'VOLUME') {
-                        // Look for any duplicate volumes that have no notes or rests between them.
-                    }
-                }
-            }
-
-            return newTokenList;
-        }
-
-        function stringifyMML(tokens) {
-            let outStr = '';
-            for (const token of tokens) {
-                outStr += token.value;
-            }
-            return outStr;
         }
 
         function mmlToNewTrack(title, mmlTokens) {
@@ -2274,7 +2231,6 @@ export default {
             let previousNote = null;
             for (let i = 0; i < newTokenList.length; i++) {
                 let token = newTokenList[i];
-                //console.log(token);
                 if (token.type === 'LENGTH') {
                     let tokenLength = token.value.split('L')[1];
                     if (tokenLength !== length) {
@@ -2473,8 +2429,6 @@ export default {
                             const parsedMIDI = new MIDI(arrayBuffer);
                             await parsedMIDI.isReady;
 
-                            //console.log(parsedMIDI);
-
                             const ticksPerBeat = parsedMIDI.timeDivision;
                             const fileDuration = parsedMIDI.duration;
                             const fileTempo = parsedMIDI.tempoChanges.at(-2).tempo;
@@ -2484,8 +2438,6 @@ export default {
                             parsedMIDI.tracks.forEach((track, idx) => {
 
                                 const trackName = track.name || `Track ${idx}`;
-                                //console.log(trackName);
-
                                 const activeNotes = []; // {pitch: 66, ticks: 44, velocity: 127}
                                 const sustainBuffer = [];
                                 const pairedNotes = []; // {startTicks: 1, pitch: 66, duration: 76 (in ticks, end ticks minus start ticks), velocity: 65}
@@ -2578,8 +2530,6 @@ export default {
 
                                     const newTrack = addTrack(instruments.value[10], null, trackName);
 
-                                    //console.log(pairedNotes);
-
                                     for (const note of pairedNotes) {
 
                                         const notePitch = note.pitch - 12;
@@ -2631,13 +2581,12 @@ export default {
                                     parentTrack: tracks.value[firstAddedTrackIndex],
                                     muted: false
                                 };
-                                
+
                                 tempoMarkersTemp.push(marker);
                                 previousTempo = Math.round(tempo.tempo);
                             }
 
                             tempoMarkers.value = [...tempoMarkers.value, ...tempoMarkersTemp];
-                            //console.log(tempoMarkers.value);
 
                         } catch (err) {
                             console.error('Error parsing MIDI file:', err);
@@ -2685,7 +2634,6 @@ export default {
             let oldSize = notesInGrid.value.length;
             notesInGrid.value = notesInGrid.value.filter(n => n.id !== note.id);
             let diff = oldSize - notesInGrid.value.length;
-            // console.log(`Removed a note!`)
             for (const track of tracks.value) {
                 track.notes = track.notes.filter(n => n.id !== note.id);
             }
@@ -2741,7 +2689,6 @@ export default {
             tracks,
             noteWidthToMML,
             backgroundStyle,
-            genMML,
             genTokensOutright,
             renderTokens,
             showSuccessNotification,
