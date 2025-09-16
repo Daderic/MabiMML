@@ -73,6 +73,8 @@
 </template>
 
 <script>
+import { consoleColors } from 'spessasynth_lib';
+
 export default {
     props: {
         tracks: Array,
@@ -205,13 +207,17 @@ export default {
 
         },
         trackHasPolyphony(track) {
-            track.notes.sort((a,b) => {return b.left - a.left; });
+            track.notes.sort((a,b) => {return b.start - a.start; });
             for (let i = 0; i < track.notes.length; ++i) {
                 const rightNote = track.notes[i];
                 const leftNote = i + 1 < track.notes.length ? track.notes[i + 1] : null;
                 if (leftNote === null) return false;
                 // Scan from left to right. The next note should not have a left value <= note.end
-                if (rightNote.left < leftNote.left + leftNote.width + 1) {
+                if (rightNote.start < leftNote.end) {
+                    rightNote.highlighted = true;
+                    // rightNote.color = 'hsla(212, 100%, 50%, 0.5)';
+                    leftNote.highlighted = true;
+                    // leftNote.color = 'hsla(212, 100%, 50%, 0.5)';
                     return true;
                 }
             }
@@ -233,9 +239,9 @@ export default {
         getRenderedTrackTokens(track) {
             if (this.tokenCache.has(track)) return this.tokenCache.get(track);
             if (this.trackHasPolyphony(track)) return { tokens: [], rendered: '' };
-            const tokens = this.generateTokens(track)[0];
-            const rendered = this.renderTokens(tokens);
-            const result = { tokens, rendered };
+            const result = this.generateTokens(track)[0];
+            //const rendered = this.renderTokens(tokens);
+            //const result = { tokens, rendered };
             this.tokenCache.set(track, result);
             return result;
         },

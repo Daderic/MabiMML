@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "core-js": "^3.8.3",
+    "heap-js": "^2.6.0",
     "spessasynth_lib": "^3.24.0",
     "vue": "^3.2.13"
   },
