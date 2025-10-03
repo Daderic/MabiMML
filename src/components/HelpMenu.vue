@@ -104,7 +104,7 @@
                 belonging to that track.</li>
               <li>To change the color of a track and its notes, click on the outlined box at the bottom-center of the
                 selected track's tab.</li>
-              <li>You can have a minimum of 1 track, and a maximum of 16 tracks.</li>
+              <li>You can have a minimum of 1 track, and a maximum of 15 tracks.</li>
               <li>The number of tracks you can have at once is dependant on screen width. This is so that smaller
                 screens can still access all of their created tabs easily.</li>
               <li>Hovering over a track tab will show you the name of the track.</li>
@@ -153,6 +153,12 @@
                 Melody, Harmony 1, Harmony 2, Song)</li>
             </ul>
 
+            <h3>Exporting MIDI</h3>
+            <ul>
+              <li>Clicking on the "Export MIDI" button will download "MySong.mid" directly.</li>
+              <li>Only audible tracks will be exported.</li>
+            </ul>
+
             <h3>Importing MIDI</h3>
             <ul>
               <li>Clicking on the "Import MIDI" button will open your computer's file browser.</li>
@@ -193,12 +199,11 @@
             <h3>Planned Features</h3>
             <ul>
               <li>Jabchiel MML export.</li>
-              <li>MIDI export support.</li>
-              <li>Support for saving/loading "projects".</li>
               <li>Undo/Redo functionality.</li>
+              <li>Other algorithm options for track splitting.</li>
+              <li>Support for saving/loading "projects".</li>
               <li>Better exported MML optimization.</li>
               <li>Improved note rendering speed.</li>
-              <li>Other algorithm options for track splitting.</li>
             </ul>
 
             <p class="credits">Credits: Made by Daderic</p>

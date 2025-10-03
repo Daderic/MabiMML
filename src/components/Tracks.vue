@@ -48,7 +48,7 @@ export default {
 
 
     const canAddTrack = computed(() => {
-      if (tracks.value.length > 15)
+      if (tracks.value.length > 14)
         return false;
       const minWidth = 75;
       const totalWidth = tracks.value.length * minWidth;

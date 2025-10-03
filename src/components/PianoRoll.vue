@@ -38,6 +38,7 @@
             <!--<button class="MML-converter" @click="genTokensOutright" style="margin-left: 10px;">Gen MML</button>-->
             <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
             <button @click="importMidi" style="margin-left: 10px;">Import MIDI</button>
+            <button @click="exportMidi" style="margin-left: 10px;">Export MIDI</button>
             <input type="file" id="hiddenFileInput" style="display: none" accept=".mid,.midi" />
             <div class="grid-division-selector">
                 <label for="grid-select" style="padding-left: 10px">Grid Spacing: </label>
@@ -1011,19 +1012,9 @@ export default {
             synth.value.programChange(0, selectedInstrument.value.program);
         }
 
-        const playSequence = async (fromClick = null) => {
-            try {
-                if (fromClick && isPlaying.value) {
-                    stopPlaying();
-                    markerPosition.value = markerReplayPosition.value;
-                    return;
-                }
-
-                const tempMidiBuilder = new MIDIBuilder("untitled", 480, tempo.value);
-
-                //midiBuilder.value.addEvent(0, 0, 0xC0, [selectedInstrument.value.program]);
-
-                await context.value.resume();
+        async function getMidiBlob(name="MySong", startPosition=0) {
+            const tempMidiBuilder = new MIDIBuilder(name, 480, tempo.value);
+            await context.value.resume();
                 if (!synth.value) return;
 
                 let notesAdded = 0;
@@ -1037,8 +1028,15 @@ export default {
                     }
                 }
 
+                // Setting the instruments per track.
+                audibleTracks.forEach((track, idx) => {
+                    let index = idx >= 9 ? idx + 1 : idx
+                    const channel = index % 16;
+                    tempMidiBuilder.addEvent(0, index, 0xC0 | channel , [track.instrument.program]);
+                });
+
                 notesInGrid.value.forEach(note => {
-                    if (!note.muted && note.left + note.width >= markerPosition.value) {
+                    if (!note.muted && note.left + note.width >= startPosition) {
 
                         // Code to get the note's parent track
                         let containingTrack = note.track;
@@ -1047,20 +1045,20 @@ export default {
                         //         containingTrack = track;
                         //     }
                         // }
-                        const trackIndex = audibleTracks.indexOf(containingTrack);
-                        const channel = trackIndex;//trackIndex;
+                        const trackIndex = audibleTracks.indexOf(containingTrack) >= 9 ? audibleTracks.indexOf(containingTrack) + 1 : audibleTracks.indexOf(containingTrack);
+                        const channel = trackIndex % 16;//trackIndex;
                         const pitch = note.pitch;
                         // Conversion from pixels to time.
                         const noteStartTime = note.start / (960/4) * 120;
                         const noteDuration = (note.length) / (960/4) * 120;
-                        const markerTime = markerPosition.value / 16 * 120;
+                        const markerTime = startPosition / 16 * 120;
                         const startTime = Math.max(noteStartTime, markerTime) - markerTime;
                         const duration = Math.min(noteDuration, noteStartTime + noteDuration - markerTime);
                         const volume = Math.max(0, Math.min(127, (note.volume + 1) * 8 - 1));
 
  
 
-                        tempMidiBuilder.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
+                        //tempMidiBuilder.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
                         tempMidiBuilder.addNoteOn(startTime, trackIndex, channel, pitch, volume);
                         tempMidiBuilder.addNoteOff(startTime + duration - 1, trackIndex, channel, pitch);
                         notesAdded++;
@@ -1071,7 +1069,7 @@ export default {
                     if (tempoMarker.parentTrack.isMuted)
                         continue;
                     const tempoStartTime = tempoMarker.left / 16 * 120;
-                    const markerTime = markerPosition.value / 16 * 120;
+                    const markerTime = startPosition / 16 * 120;
                     const tempoChangeTime = Math.max(tempoStartTime, markerTime) - markerTime;
                     tempMidiBuilder.addSetTempo(tempoChangeTime, tempoMarker.tempo);
                 }
@@ -1085,6 +1083,18 @@ export default {
                 midiBuilder.value = tempMidiBuilder;
 
                 const b = await (writeMIDIFile(midiBuilder.value));
+                return b;
+        }
+
+        const playSequence = async (fromClick = null) => {
+            try {
+                if (fromClick && isPlaying.value) {
+                    stopPlaying();
+                    markerPosition.value = markerReplayPosition.value;
+                    return;
+                }
+
+                const b = await getMidiBlob("untitled", markerPosition.value);
                 seq.value = new Sequencer([{ binary: b }], synth.value);
                 seq.value.skipToFirstNoteOn = false;
                 seq.value.loop = loopSong.value && markerPosition.value === 0;
@@ -1634,7 +1644,7 @@ export default {
                     removeNote(existingNote, false);
                 }
                 
-                console.log(existingNote.length, existingNote.left, existingNote.start, existingNote.end);
+                //console.log(existingNote.length, existingNote.left, existingNote.start, existingNote.end);
             }
         };
 
@@ -1692,7 +1702,7 @@ export default {
                 }
             }
 
-            if (tracks.value.length + trackWrappers.length - 1 > 32) {
+            if (tracks.value.length + trackWrappers.length - 1 > 15) {
                 showFailureMessage('Failed to split track! (Process would create too many tracks!)');
                 return;
             }
@@ -2689,6 +2699,7 @@ export default {
                             }
 
                             tempoMarkers.value = [...tempoMarkers.value, ...tempoMarkersTemp];
+                            hiddenFileInput.value = "";
 
                         } catch (err) {
                             console.error('Error parsing MIDI file:', err);
@@ -2700,6 +2711,19 @@ export default {
             };
 
             hiddenFileInput.addEventListener('change', handleFileSelect);
+        }
+
+        async function exportMidi() {
+            const b = await getMidiBlob("MySong", 0);
+            const blob = new Blob([b.buffer], {type: "audio/mid"});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "MySong.mid";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
 
@@ -2816,6 +2840,7 @@ export default {
             gridWrapper,
             tryRemoveNote,
             importMidi,
+            exportMidi,
             copyToClipboard
         };
     }
