@@ -1060,7 +1060,7 @@ export default {
 
                         //tempMidiBuilder.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
                         tempMidiBuilder.addNoteOn(startTime, trackIndex, channel, pitch, volume);
-                        tempMidiBuilder.addNoteOff(startTime + duration - 1, trackIndex, channel, pitch);
+                        tempMidiBuilder.addNoteOff(startTime + duration, trackIndex, channel, pitch);
                         notesAdded++;
                     }
                 });
