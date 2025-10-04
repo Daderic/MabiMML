@@ -1100,7 +1100,7 @@ export default {
 
         const playSequence = async (fromClick = null) => {
             try {
-                if (fromClick && isPlaying.value) {
+                if (fromClick && isPlaying.value || notesInGrid.value.length === 0) {
                     stopPlaying();
                     markerPosition.value = markerReplayPosition.value;
                     return;
