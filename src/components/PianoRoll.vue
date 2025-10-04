@@ -878,6 +878,8 @@ export default {
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
                     }
+                    if (isPlaying.value)
+                        playSequence();
                 }
             } else if (event.key === 'ArrowDown') {
                 if (event.ctrlKey || event.shiftKey) {
@@ -893,6 +895,8 @@ export default {
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
                     }
+                    if (isPlaying.value)
+                        playSequence();
                 }
             } else if (event.key === 'ArrowLeft') {
                 if (event.ctrlKey || event.shiftKey) {
@@ -906,6 +910,8 @@ export default {
                         note.start = Math.round(note.left / (256) * (960*4));
                         note.end = Math.round(note.start + note.length);
                     }
+                    if (isPlaying.value)
+                        playSequence();
                 }
             } else if (event.key === 'ArrowRight') {
                 if (event.ctrlKey || event.shiftKey) {
@@ -916,6 +922,8 @@ export default {
                         note.start = Math.round(note.left / (256) * (960*4));
                         note.end = Math.round(note.start + note.length);
                     }
+                    if (isPlaying.value)
+                        playSequence();
                 }
             } else if (event.key === 'c' && event.ctrlKey) {
                 event.preventDefault();
@@ -934,6 +942,8 @@ export default {
                     noteClipboard.push(note);
                     removeNote(note, true);
                 }
+                if (isPlaying.value)
+                    playSequence();
                 showSuccessMessage(`Cut ${noteClipboard.length} note${noteClipboard.length > 1 ? 's' : ''} and put them in the clipboard!`, 1000);
             } else if (event.key === 'v' && event.ctrlKey) {
                 event.preventDefault();
@@ -976,6 +986,8 @@ export default {
                 selectedNotes.value.push(...newNotes);
                 notesInGrid.value.push(...newNotes);
                 track.notes.unshift(...newNotes.reverse()); // unshift in correct order
+                if (isPlaying.value)
+                    playSequence();
 
                 showSuccessMessage(`Pasted ${noteClipboard.length} notes from the clipboard!`, 1000);
             } else if (event.key === 't' && selectedNotes.value.length > 0) {
@@ -1012,7 +1024,7 @@ export default {
             synth.value.programChange(0, selectedInstrument.value.program);
         }
 
-        async function getMidiBlob(name="MySong", startPosition=0) {
+        async function getMidiBlob(name="MySong", startPosition=0, forPlayback=false) {
             const tempMidiBuilder = new MIDIBuilder(name, 480, tempo.value);
             await context.value.resume();
                 if (!synth.value) return;
@@ -1060,7 +1072,7 @@ export default {
 
                         //tempMidiBuilder.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
                         tempMidiBuilder.addNoteOn(startTime, trackIndex, channel, pitch, volume);
-                        tempMidiBuilder.addNoteOff(startTime + duration, trackIndex, channel, pitch);
+                        tempMidiBuilder.addNoteOff(startTime + duration - (forPlayback), trackIndex, channel, pitch);
                         notesAdded++;
                     }
                 });
@@ -1094,7 +1106,7 @@ export default {
                     return;
                 }
 
-                const b = await getMidiBlob("untitled", markerPosition.value);
+                const b = await getMidiBlob("untitled", markerPosition.value, true);
                 seq.value = new Sequencer([{ binary: b }], synth.value);
                 seq.value.skipToFirstNoteOn = false;
                 seq.value.loop = loopSong.value && markerPosition.value === 0;
