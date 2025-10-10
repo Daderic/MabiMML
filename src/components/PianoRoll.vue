@@ -1186,7 +1186,7 @@ export default {
                 instrKeyMin.value = selectedInstrument.value.min;
                 instrKeyMax.value = selectedInstrument.value.max;
 
-                synth.value.programChange(0, selectedInstrument.value.program);
+                synth.value.programChange(selectedTrackIndex.value, selectedInstrument.value.program);
                 if (isPlaying.value && !fromTrack)
                     playSequence();
 
