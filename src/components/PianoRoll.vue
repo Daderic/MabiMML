@@ -34,11 +34,15 @@
                 <label for="tempo-select">Tempo: </label>
                 <input type="number" id="tempo-select" v-model.number="tempo" min="40" max="240">
             </div>
-            <button class="track-splitter" @click="trackify">Split Track</button>
+            <button class="track-splitter" @click="trackify">Auto-Split Track</button>
+            <label style="padding: 0 10px;">
+                <input type="checkbox" v-model="preserveHighNotes" />
+                Favor High Notes
+            </label>
             <!--<button class="MML-converter" @click="genTokensOutright" style="margin-left: 10px;">Gen MML</button>-->
             <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
             <button @click="importMidi" style="margin-left: 10px;">Import MIDI</button>
-            <button @click="exportMidi" style="margin-left: 10px;">Export MIDI</button>
+            <button @click="exportMidi" style="margin-left: 10px;">Export MIDI (WIP)</button>
             <input type="file" id="hiddenFileInput" style="display: none" accept=".mid,.midi" />
             <div class="grid-division-selector">
                 <label for="grid-select" style="padding-left: 10px">Grid Spacing: </label>
@@ -140,6 +144,7 @@ export default {
         const autoScrollSong = ref(false);
         const gridCanvas = ref(null);
         const windowWidth = ref(window.innerWidth);
+        const preserveHighNotes = ref(false);    // true = melody on top, false = bass on bottom
 
         const instruments = ref([
             { name: 'Lute', program: 0, min: 16, max: 88 },
@@ -1036,50 +1041,48 @@ export default {
                 for (const track of tracks.value) {
                     if (!track.isMuted) {
                         audibleTracks.push(track);
-                        tempMidiBuilder.addNewTrack(track.name + tracks.value.indexOf(track));
+                        tempMidiBuilder.addNewTrack(track.name);
                     }
                 }
 
                 // Setting the instruments per track.
                 audibleTracks.forEach((track, idx) => {
-                    let index = idx >= 9 ? idx + 1 : idx
-                    const channel = index % 16;
+                    let index = idx + 1;
+                    const channel = (idx >= 9 ? idx + 1 : idx);
                     tempMidiBuilder.addEvent(0, index, 0xC0 | channel , [track.instrument.program]);
                 });
 
-                notesInGrid.value.forEach(note => {
-                    if (!note.muted && note.left + note.width >= startPosition) {
+                const markerTime = startPosition / 16 * 120;
 
-                        // Code to get the note's parent track
-                        let containingTrack = note.track;
-                        // for (const track of tracks.value) {
-                        //     if (track.notes.some(n => n.id === note.id)) {
-                        //         containingTrack = track;
-                        //     }
-                        // }
-                        const trackIndex = audibleTracks.indexOf(containingTrack) >= 9 ? audibleTracks.indexOf(containingTrack) + 1 : audibleTracks.indexOf(containingTrack);
-                        const channel = trackIndex % 16;//trackIndex;
-                        const pitch = note.pitch;
-                        // Conversion from pixels to time.
-                        const noteStartTime = note.start / (960/4) * 120;
-                        const noteDuration = (note.length) / (960/4) * 120;
-                        const markerTime = startPosition / 16 * 120;
-                        const startTime = Math.max(noteStartTime, markerTime) - markerTime;
-                        const duration = Math.min(noteDuration, noteStartTime + noteDuration - markerTime);
-                        const volume = Math.max(0, Math.min(127, (note.volume + 1) * 8 - 1));
+                const sortedNotes = [...notesInGrid.value].sort((a, b) => a.start - b.start);
 
- 
+                sortedNotes.forEach(note => {
+                    if (note.muted) return;
+                    if (note.left + note.width < startPosition) return; // simplified visibility check
 
-                        //tempMidiBuilder.addEvent(startTime, trackIndex, 0xC0 | (channel & 0x0F), [containingTrack.instrument.program]);
-                        tempMidiBuilder.addNoteOn(startTime, trackIndex, channel, pitch, volume);
-                        tempMidiBuilder.addNoteOff(startTime + duration - (forPlayback), trackIndex, channel, pitch);
-                        notesAdded++;
-                    }
+                    const containingTrack = note.track;
+                    const rawIndex = audibleTracks.indexOf(containingTrack);
+                    if (rawIndex === -1) return; // note's track is muted or unregistered — skip
+
+                    const trackIndex = rawIndex + 1;
+                    const channel = (rawIndex >= 9 ? rawIndex + 1 : rawIndex);
+                    const pitch = note.pitch;
+
+                    const noteStartTime = note.start / (960/4) * 120;
+                    const noteDuration = note.length / (960/4) * 120;
+                    const startTime = Math.max(noteStartTime, markerTime) - markerTime;
+                    const duration = Math.min(noteDuration, noteStartTime + noteDuration - markerTime);
+                    const volume = Math.max(0, Math.min(127, (note.volume + 1) * 8 - 1));
+
+                    if (duration <= 0) return; // guard against zero/negative duration
+
+                    tempMidiBuilder.addNoteOn(startTime, trackIndex, channel, pitch, volume);
+                    tempMidiBuilder.addNoteOff(startTime + duration - (forPlayback ? 1 : 0), trackIndex, channel, pitch);
+                    notesAdded++;
                 });
 
                 for (const tempoMarker of tempoMarkers.value) {
-                    if (tempoMarker.parentTrack.isMuted)
-                        continue;
+                    if (tempoMarker.parentTrack.isMuted) continue;
                     const tempoStartTime = tempoMarker.left / 16 * 120;
                     const markerTime = startPosition / 16 * 120;
                     const tempoChangeTime = Math.max(tempoStartTime, markerTime) - markerTime;
@@ -1087,12 +1090,13 @@ export default {
                 }
 
                 if (notesAdded === 0) {
-                    return;
+                    return null;
                 }
 
                 tempMidiBuilder.flush();
 
                 midiBuilder.value = tempMidiBuilder;
+
 
                 const b = await (writeMIDIFile(midiBuilder.value));
                 return b;
@@ -1107,6 +1111,7 @@ export default {
                 }
 
                 const b = await getMidiBlob("untitled", markerPosition.value, true);
+                if (b === null) return;
                 seq.value = new Sequencer([{ binary: b }], synth.value);
                 seq.value.skipToFirstNoteOn = false;
                 seq.value.loop = loopSong.value && markerPosition.value === 0;
@@ -1634,6 +1639,7 @@ export default {
                 startDrag(notesInGrid.value.find(note => note.id == id), event, false);
             } else {
                 // Here, we have identified that we clicked on an existing note.
+                // console.log(existingNote);
                 if (event.button === 0) {
                     const resizeHandleWidth = Math.min(10, (existingNote.width + 1) * 0.4) / zoomScalar.value;
                     const volumeHandleCenter = { x: existingNote.left + (existingNote.width + 1) / 2, y: existingNote.top + gridHeight };
@@ -1663,75 +1669,142 @@ export default {
         //let trackWrappers = [];
 
         const trackify = () => {
-            let notesList = [...selectedTrack.value.notes].sort((a, b) => {
-                if (a.start === b.start) {
-                    return a.top - b.top;
-                }
-                return a.start - b.start;
-            });
-            //let trackWrappers = [];
-            // for (let i = 0; i < tracks.value.length; ++i) {   
-            //     trackWrappers.push({
-            //         notes: [],
-            //         track: tracks.value[i]
-            //     });
-            // }
+            const sourceName = selectedTrack.value.name + '';
+            const maxTracks = Math.min(15 - tracks.value.length + 1, 3);
 
-            // Idea: Take the selected track and split it into more tracks.
-            // This involves adding new tracks (only if allowed, otherwise cancel the operation)
-            // if (tracks.value.length < 16)
-            //     addTrack();
-            // Then, put the proper notes into the proper tracks.
+            // Capture original note ids before anything changes
+            const originalNoteIds = new Set(selectedTrack.value.notes.map(n => n.id));
 
-            // For all notes in the selected track
-            // starting with selected track:
-            // if note can go into this track, then add it
-            // otherwise, add a new track, and put the note in there.
+            const notesList = [...selectedTrack.value.notes].sort((a, b) =>
+                a.start === b.start
+                    ? preserveHighNotes.value ? b.top - a.top : a.top - b.top
+                    : a.start - b.start
+            );
 
-            // after all notes are situated, loop through all tracks in the wrapper and set their notes equal to the new note lists
-
-            let trackWrappers = [];
-            trackWrappers.push({
+            const trackWrappers = [{
                 notes: [],
                 track: selectedTrack.value,
                 index: 0
-            });
+            }];
 
             for (const note of notesList) {
+                let placed = false;
+
                 for (const trackWrapper of trackWrappers) {
-                    if (!trackWrapper.notes[0] || trackWrapper.notes[0].end <= note.start) {
-                        trackWrapper.notes.unshift(note);
+                    const lastNote = trackWrapper.notes[trackWrapper.notes.length - 1];
+                    if (!lastNote || lastNote.end <= note.start) {
+                        trackWrapper.notes.push(note);
+                        placed = true;
                         break;
+                    }
+                }
+
+                if (!placed) {
+                    if (trackWrappers.length < maxTracks) {
+                        trackWrappers.push({
+                            notes: [note],
+                            track: {
+                                instrument: selectedTrack.value.instrument,
+                                color: null,
+                                name: sourceName + ` (${trackWrappers.length})`
+                            },
+                            index: trackWrappers.length
+                        });
                     } else {
-                        if (trackWrapper.index === trackWrappers.length - 1) {
-                            trackWrappers.push({
-                                notes: [],
-                                track: { instrument: trackWrapper.track.instrument, color: null, name: selectedTrack.value.name + ` (${trackWrappers.length})` },
-                                index: trackWrappers.length
-                            });
+                        const sixtyFourth = (960 * 4) / 64;
+
+                        const earliest = trackWrappers.reduce((best, tw) =>
+                            tw.notes[tw.notes.length - 1].end < best.notes[best.notes.length - 1].end ? tw : best
+                        );
+                        const blocking = earliest.notes[earliest.notes.length - 1];
+
+                        if (blocking.end > note.start) {
+                            // Step 1: truncate blocking note to minimum of one 64th note
+                            const minBlockingEnd = blocking.start + sixtyFourth;
+                            const newBlockingEnd = Math.max(minBlockingEnd, note.start);
+                            
+                            blocking.end = newBlockingEnd;
+                            blocking.length = newBlockingEnd - blocking.start;
+                            blocking.width = Math.max(3, blocking.length / (960 * 4) * 256 - 1);
+
+                            // Step 2: check if incoming note needs to shift
+                            const overlap = newBlockingEnd - note.start;
+                            
+                            if (overlap <= 0) {
+                                // No shift needed — truncation was enough
+                                earliest.notes.push(note);
+                            } else {
+                                // Shift needed — snap to next 64th boundary after blocking end
+                                const shiftedStart = Math.ceil(newBlockingEnd / sixtyFourth) * sixtyFourth;
+                                const shiftAmount = shiftedStart - note.start;
+
+                                // Step 3: only shift if the shift is small relative to note length
+                                // e.g. shifting by more than 25% of the note's duration = delete
+                                const maxAllowedShift = note.length * 0.25;
+
+                                if (shiftAmount <= maxAllowedShift) {
+                                    note.start = shiftedStart;
+                                    note.end = note.end + shiftAmount;
+                                    note.left = note.start / (960 * 4) * 256;
+                                    earliest.notes.push(note);
+                                }
+                                // else: drop the note — shift would distort it too much
+                            }
+                        } else {
+                            earliest.notes.push(note);
                         }
                     }
                 }
             }
 
-            if (tracks.value.length + trackWrappers.length - 1 > 15) {
-                showFailureMessage('Failed to split track! (Process would create too many tracks!)');
-                return;
-            }
+            showSuccessMessage(`Successfully split "${sourceName}" into ${trackWrappers.length} tracks!`, 3000);
 
-            showSuccessMessage(`Successfully split the track "${selectedTrack.value.name}" into ${trackWrappers.length} tracks!`, 3000);
-
+            // create any new tracks needed
             for (const trackWrapper of trackWrappers) {
                 if (!tracks.value.includes(trackWrapper.track)) {
-                    trackWrapper.track = addTrack(trackWrapper.track.instrument, trackWrapper.track.color, trackWrapper.track.name);
+                    trackWrapper.track = addTrack(
+                        trackWrapper.track.instrument,
+                        trackWrapper.track.color,
+                        trackWrapper.track.name
+                    );
                 }
+                trackWrapper.notes.sort((a, b) => a.start - b.start);
+            }
+
+            // assign notes to tracks
+            for (const trackWrapper of trackWrappers) {
+                trackWrapper.track.notes = [];
+            }
+
+            const assignedIds = new Set();
+            for (const trackWrapper of trackWrappers) {
                 trackWrapper.track.notes = trackWrapper.notes;
-                for (const note of trackWrapper.track.notes) {
+                for (const note of trackWrapper.notes) {
                     note.track = trackWrapper.track;
                     note.color = trackWrapper.track.color;
+                    assignedIds.add(note.id);
                 }
             }
 
+            // Remove any original notes that weren't assigned (ghost notes)
+            notesInGrid.value = notesInGrid.value.filter(n =>
+                !originalNoteIds.has(n.id) || assignedIds.has(n.id)
+            );
+
+            // for (const trackWrapper of trackWrappers) {
+            //     for (const note of trackWrapper.track.notes) {
+            //         if (!notesInGrid.value.includes(note)) {
+            //             notesInGrid.value.push(note);
+            //         }
+            //     }
+            // }
+
+            // Update colors for all remaining notes
+            for (const note of notesInGrid.value) {
+                if (note.track) note.color = note.track.color;
+            }
+
+            drawCanvasGrid();
         };
 
         function hexToRgba(originalColor, alpha) {
@@ -1829,6 +1902,10 @@ export default {
                     let volumeString = token.volume === u.implicitVol ? '' : `V${token.volume}`;
 
                     let octaveDiff = token.octave - u.implicitOct;
+
+                    let isTied = token.name.startsWith('&');
+
+
                     if (Math.abs(octaveDiff) > 2) {
                         octaveString = `o${token.octave}`;
                     } else {
@@ -1837,7 +1914,9 @@ export default {
 
                     if (token.length === u.implicitLen) {
                         u.addChild(new GraphNode(`${volumeString}${octaveString}${token.name}`, token.octave, u.implicitLen, token.volume));
-                        u.addChild(new GraphNode(`${volumeString}N${token.pitch}`, u.implicitOct, u.implicitLen, token.volume));
+
+                        if (!isTied)
+                            u.addChild(new GraphNode(`${volumeString}N${token.pitch}`, u.implicitOct, u.implicitLen, token.volume));
 
                         if (token.name === 'b') {
                             octaveDiff = (token.octave+1) - u.implicitOct;
@@ -1885,7 +1964,9 @@ export default {
                             u.addChild(new GraphNode(`${volumeString}${octaveString}b+${suffixLengthString}`, token.octave - 1, u.implicitLen, token.volume));
                         }
 
-                        u.addChild(new GraphNode(`${volumeString}L${lengthString}N${token.pitch}`, u.implicitOct, token.length, token.volume));
+                        if (!isTied)
+                            u.addChild(new GraphNode(`${volumeString}L${lengthString}N${token.pitch}`, u.implicitOct, token.length, token.volume));
+                        
                     }
                 } else if (token.type === 'REST') {
                     if (token.length === u.implicitLen) {
@@ -2345,153 +2426,160 @@ export default {
 
         function mmlToNewTrack(title, mmlTokens) {
             let newTokenList = [...mmlTokens];
-            // Creates a new track with title and with data from mmlTokens
             let newTrack = addTrack(instruments.value[10], null, title);
             let octave = 4;
             let length = '4';
-            let tempo = '120';
+            let currentTempo = '120';
             let volume = '8';
-            let builderX = 0; // We will update the currentX based on note length/width/etc
+            let builderX = 0;       // float, pixel space, for left/width only
+            let builderBeats = 0;   // integer, beat space, for start/end/length only
             let previousNote = null;
-            for (let i = 0; i < newTokenList.length; i++) {
-                let token = newTokenList[i];
-                if (token.type === 'LENGTH') {
-                    let tokenLength = token.value.split('L')[1];
-                    if (tokenLength !== length) {
-                        length = tokenLength;
-                    }
-                } else if (token.type === 'TIE') {
-                    if (previousNote === null || newTokenList[i + 1] == null)
-                        continue;
-                    // if the next note has the same pitch as the previous note, then we modify the duration of previous note and increment builderX and i
-                    let nextNote = newTokenList[i + 1];
-                    let noteLength = length;
-                    let noteName = 'C';
-                    let noteOctave = octave;
-                    let notePitch = 0;
 
-                    if (nextNote.value.startsWith('N')) {
-                        notePitch = Number(nextNote.value.split('N')[1]);
-                        noteOctave = Math.floor(notePitch / 12);
-                        noteName = noteNames[(notePitch - 12 * noteOctave) % 12];
-                        let dotted = noteLength.includes('.');
-                        noteLength = Number(noteLength.slice(0, noteLength.length - dotted)) * (dotted ? 2 / 3 : 1);
+            // Helper: resolve note length number and dotted flag from a length string
+            // Returns { lengthNum, dotted } where lengthNum is the MML divisor (e.g. 4 for quarter)
+            function resolveLengthString(str) {
+                const dotted = str.includes('.');
+                const lengthNum = Number(str.replace('.', ''));
+                return { lengthNum, dotted };
+            }
+
+            // Helper: given an MML length divisor and dotted flag, return beats in internal units
+            function toBeats(lengthNum, dotted) {
+                return Math.round((960 * 4) / lengthNum * (dotted ? 1.5 : 1));
+            }
+
+            // Helper: given an MML length divisor and dotted flag, return pixels
+            function toPixels(lengthNum, dotted) {
+                return (256 / lengthNum) * (dotted ? 1.5 : 1);
+            }
+
+            // Helper: parse a note token value into { noteName, noteOctave, notePitch, lengthNum, dotted }
+            function parseNoteToken(value, currentOctave, currentLength) {
+                let noteName, noteOctave, notePitch, lengthNum, dotted;
+
+                if (value.startsWith('N')) {
+                    notePitch = Number(value.slice(1));
+                    noteOctave = Math.floor(notePitch / 12);
+                    noteName = noteNames[notePitch % 12];
+                    const resolved = resolveLengthString(currentLength);
+                    lengthNum = resolved.lengthNum;
+                    dotted = resolved.dotted;
+                } else {
+                    const sharp = value.includes('#') || value.includes('+');
+                    const flat = value.includes('-');
+                    dotted = value.includes('.');
+                    noteName = getEnharmonicEquivalent(value.slice(0, 1 + sharp + flat));
+                    noteOctave = currentOctave;
+                    const noteIndex = noteNames.indexOf(noteName);
+                    if (noteIndex === 11 && flat) noteOctave -= 1;
+                    if (noteIndex === 0 && sharp) noteOctave += 1;
+                    notePitch = noteNames.indexOf(noteName) + 12 * noteOctave;
+
+                    const suffix = value.slice((sharp || flat) ? 2 : 1);
+                    const suffixStripped = suffix.replace('.', '');
+                    if (suffixStripped.length > 0 && !isNaN(Number(suffixStripped))) {
+                        // Note has its own explicit length
+                        lengthNum = Number(suffixStripped);
                     } else {
-                        let sharp = nextNote.value.includes('#') || nextNote.value.includes('+')
-                        let flat = nextNote.value.includes('-');
-                        let dotted = nextNote.value.includes('.');
-                        noteName = getEnharmonicEquivalent(nextNote.value.slice(0, 1 + sharp + flat));
-                        let noteIndex = noteNames.indexOf(noteName);
-                        if (noteIndex === 11 && flat)
-                            noteOctave -= 1;
-                        if (noteIndex === 0 && sharp)
-                            noteOctave += 1;
-                        if (nextNote.value.length - dotted > 1 + sharp + flat) { // If the note has a length added on
-                            noteLength = Number(nextNote.value.slice(((sharp || flat) ? 2 : 1), nextNote.value.length - dotted)) * (dotted ? 2 / 3 : 1);
-                        } else {// If the note has no added length
-                            let Ldotted = length.includes('.');
-                            dotted = Ldotted || dotted;
-                            noteLength = Number(length.slice(0, length.length - Ldotted)) * (dotted ? 2 / 3 : 1);
-                        }
-                        notePitch = noteNames.indexOf(noteName) + 12 * noteOctave;
+                        // Use global length, merge dotted flags
+                        const resolved = resolveLengthString(currentLength);
+                        lengthNum = resolved.lengthNum;
+                        dotted = dotted || resolved.dotted;
                     }
-                    if (previousNote.pitch - 12 === notePitch) {
-                        builderX += 256 / noteLength;
-                        previousNote.width += 256 / noteLength;
-                        previousNote.length += (960*4) / noteLength;
-                        previousNote.end += (960*4) / noteLength;
-                        i++;
-                    }
+                }
+
+                return { noteName, noteOctave, notePitch, lengthNum, dotted };
+            }
+
+            for (let i = 0; i < newTokenList.length; i++) {
+                const token = newTokenList[i];
+
+                if (token.type === 'LENGTH') {
+                    length = token.value.slice(1).toUpperCase() === token.value.slice(1)
+                        ? token.value.slice(1)
+                        : token.value.slice(1);
+                    // Just grab everything after L/l
+                    length = token.value.replace(/^[Ll]/, '');
 
                 } else if (token.type === 'OCTAVE') {
-                    let tokenOctave = token.value;
-                    if (tokenOctave === '<') {
-                        octave -= 1;
-                    } else if (tokenOctave === '>') {
-                        octave += 1;
-                    } else {
-                        octave = Number(tokenOctave.split('O')[1]);
-                    }
+                    if (token.value === '<') octave -= 1;
+                    else if (token.value === '>') octave += 1;
+                    else octave = Number(token.value.replace(/^[Oo]/, ''));
+
                 } else if (token.type === 'VOLUME') {
-                    let tokenVolume = token.value.split('V')[1];
-                    if (tokenVolume !== volume) {
-                        volume = tokenVolume;
-                    }
+                    volume = token.value.replace(/^[Vv]/, '');
+
                 } else if (token.type === 'TEMPO') {
-                    let tokenTempo = token.value.split('T')[1];
-                    if (tokenTempo !== tempo) {
-                        tempo = tokenTempo;
+                    const newTempo = token.value.replace(/^[Tt]/, '');
+                    if (newTempo !== currentTempo) {
+                        currentTempo = newTempo;
                         tempoMarkers.value.push({
                             left: builderX,
-                            tempo: Number(tempo),
+                            tempo: Number(currentTempo),
                             color: newTrack.color,
                             parentTrack: newTrack,
                             muted: false
                         });
                     }
-                } else if (token.type === 'REST') {
-                    let restLength = token.value.split('R')[1];
-                    if (restLength === length || Number(restLength) === 0 || isNaN(Number(restLength))) {
-                        let dotted = length.includes('.') || restLength.includes('.');
-                        let lengthNum = Number(length);
-                        builderX += (256 / lengthNum) * (dotted ? 1.5 : 1); // 1 bar is 256 pixels (no matter the tempo)
-                    } else {
-                        let dotted = restLength.includes('.');
-                        let lengthNum = Number(restLength);
-                        builderX += (256 / lengthNum) * (dotted ? 1.5 : 1); // 1 bar is 256 pixels (no matter the tempo)
-                    }
-                } else if (token.type === 'NOTE') {
-                    // notes will be placed starting from builderX
-                    // each note COULD have its own length, but notes starting with 'N' or not having a following number use the global length value
-                    let noteLength = length;
-                    let noteName = 'C';
-                    let noteOctave = octave;
-                    let notePitch = 0;
 
-                    if (token.value.startsWith('N')) {
-                        notePitch = Number(token.value.split('N')[1]);
-                        noteOctave = Math.floor(notePitch / 12);
-                        noteName = noteNames[(notePitch - 12 * noteOctave) % 12];
-                        let dotted = noteLength.includes('.');
-                        noteLength = Number(noteLength) * (dotted ? 2 / 3 : 1);
+                } else if (token.type === 'REST') {
+                    const restStr = token.value.replace(/^[Rr]/, '');
+                    let lengthNum, dotted;
+                    if (!restStr || isNaN(Number(restStr.replace('.', ''))) || Number(restStr.replace('.', '')) === 0) {
+                        // Use global length
+                        const resolved = resolveLengthString(length);
+                        lengthNum = resolved.lengthNum;
+                        dotted = resolved.dotted || restStr.includes('.');
                     } else {
-                        let sharp = token.value.includes('#') || token.value.includes('+');
-                        let flat = token.value.includes('-');
-                        let dotted = token.value.includes('.');
-                        noteName = getEnharmonicEquivalent(token.value.slice(0, 1 + sharp + flat));
-                        let noteIndex = noteNames.indexOf(noteName);
-                        if (noteIndex === 11 && flat)
-                            noteOctave -= 1;
-                        if (noteIndex === 0 && sharp)
-                            noteOctave += 1;
-                        if (token.value.length - dotted > 1 + sharp + flat) { // If the note has a length added on
-                            noteLength = Number(token.value.slice(((sharp || flat) ? 2 : 1), token.value.length)) * (dotted ? 2 / 3 : 1);
-                        } else { // If the note has no added length
-                            let Ldotted = length.includes('.');
-                            dotted = Ldotted || dotted;
-                            noteLength = Number(length) * (dotted ? 2 / 3 : 1);
-                        }
-                        notePitch = noteNames.indexOf(noteName) + 12 * noteOctave;
+                        dotted = restStr.includes('.');
+                        lengthNum = Number(restStr.replace('.', ''));
                     }
+                    builderX += toPixels(lengthNum, dotted);
+                    builderBeats += toBeats(lengthNum, dotted);
+
+                } else if (token.type === 'TIE') {
+                    if (previousNote === null || newTokenList[i + 1] == null) continue;
+                    const nextToken = newTokenList[i + 1];
+                    const parsed = parseNoteToken(nextToken.value, octave, length);
+
+                    if (previousNote.pitch - 12 === parsed.notePitch) {
+                        const px = toPixels(parsed.lengthNum, parsed.dotted);
+                        const beats = toBeats(parsed.lengthNum, parsed.dotted);
+                        builderX += px;
+                        builderBeats += beats;
+                        previousNote.width += px;
+                        previousNote.length += beats;
+                        previousNote.end += beats;
+                        i++; // skip the next note token since we consumed it
+                    }
+
+                } else if (token.type === 'NOTE') {
+                    const parsed = parseNoteToken(token.value, octave, length);
+                    const px = toPixels(parsed.lengthNum, parsed.dotted);
+                    const beats = toBeats(parsed.lengthNum, parsed.dotted);
 
                     const newNote = {
-                        left: builderX, // In pixels
-                        top: 2568 - notePitch * gridHeight, // In pixels, the top of the note
-                        width: 256 / noteLength - 1, // In pixels (we assume 4/4 time, which is 16 pixels per beat)
+                        left: builderX,
+                        top: 2568 - parsed.notePitch * gridHeight,
+                        width: px - 1,
                         highlighted: false,
                         color: newTrack.color,
                         id: notesInGrid.value.length + Date.now(),
-                        name: noteName + noteOctave,
-                        pitch: notePitch + 12,
-                        length: (960*4) / noteLength, // In beats
-                        start: builderX / 256 * (960*4), // In beats
-                        end: builderX / 256 * (960*4) + (960*4) / noteLength, // In beats
+                        name: parsed.noteName + parsed.noteOctave,
+                        pitch: parsed.notePitch + 12,
+                        length: beats,
+                        start: builderBeats,
+                        end: builderBeats + beats,
                         volume: Number(volume),
                         track: newTrack
                     };
+                    //console.log(newNote);
+
                     notesInGrid.value.push(newNote);
                     newNote.track.notes.unshift(newNote);
-                    builderX += newNote.width + 1;
+
+                    builderX += px;
+                    builderBeats += beats;
                     previousNote = newNote;
                 }
             }
@@ -2555,7 +2643,9 @@ export default {
 
                             const ticksPerBeat = parsedMIDI.timeDivision;
                             const fileDuration = parsedMIDI.duration;
-                            const fileTempo = parsedMIDI.tempoChanges.at(-2).tempo;
+                            const fileTempo = (parsedMIDI.tempoChanges.length > 1 
+                                ? parsedMIDI.tempoChanges.at(-2) 
+                                : parsedMIDI.tempoChanges.at(0))?.tempo ?? 120;
 
                             const firstAddedTrackIndex = tracks.value.length;
 
@@ -2654,28 +2744,52 @@ export default {
 
                                     const newTrack = addTrack(instruments.value[10], null, trackName);
 
-                                    for (const note of pairedNotes) {
+                                    pairedNotes.sort((a, b) => a.startTicks - b.startTicks);
 
+                                    for (const note of pairedNotes) {
                                         const notePitch = note.pitch - 12;
                                         const noteOctave = Math.floor(notePitch / 12);
                                         const noteName = noteNames[notePitch % 12];
-                                        const noteLength = Math.max(60, Math.round(note.duration / ticksPerBeat * 960)); // in beats
-                                        const noteWidth = Math.max(3, Math.round(note.duration / ticksPerBeat * 64 / 4) * 4 - 1);
-                                        const noteLeft = Math.round(note.startTicks / ticksPerBeat * 64 / 4) * 4; // t * b/t * 64px/b = px (1/4 note at 120 bpm (default) is 64 px wide)
-                                        const noteVolume = Math.floor(note.velocity / 8);
+                                        const noteVolume = Math.max(1, Math.floor(note.velocity / 8));
+
+                                        const sixtyFourth = (960 * 4) / 64; // = 60, smallest valid MML unit
+
+                                        // Snap start to nearest 64th note grid
+                                        const rawStart = note.startTicks / ticksPerBeat * 960;
+                                        const noteStart = Math.round(rawStart / sixtyFourth) * sixtyFourth;
+
+                                        // Snap length to nearest valid MML duration
+                                        const rawLength = note.duration / ticksPerBeat * 960;
+                                        // let bestLength = 960;
+                                        // let bestDiff = Infinity;
+                                        // for (let i = 1; i <= 64; i++) {
+                                        //     const plain = (960 * 4) / i;
+                                        //     const dotted = plain * 1.5;
+                                        //     if (Math.abs(plain - rawLength) < bestDiff) { bestDiff = Math.abs(plain - rawLength); bestLength = plain; }
+                                        //     if (Math.abs(dotted - rawLength) < bestDiff) { bestDiff = Math.abs(dotted - rawLength); bestLength = dotted; }
+                                        // }
+                                        // const noteLength = Math.max(sixtyFourth, bestLength);
+                                        const noteLength = Math.max(sixtyFourth, Math.round(rawLength / sixtyFourth) * sixtyFourth);
+
+                                        // Snap end to grid too, so gaps are always multiples of sixtyFourth
+                                        const noteEnd = noteStart + noteLength; // Math.round((noteStart + noteLength) / sixtyFourth) * sixtyFourth;
+                                        //const snappedLength = noteEnd - noteStart;
+
+                                        const noteLeft = noteStart / (960 * 4) * 256;
+                                        const noteWidth = noteLength / (960 * 4) * 256 - 1;
 
                                         const newNote = {
-                                            left: noteLeft, // In pixels
-                                            top: 2568 - notePitch * gridHeight, // In pixels, the top of the note
-                                            width: noteWidth, // In pixels (we assume 4/4 time, which is 16 pixels per beat)
+                                            left: noteLeft,
+                                            top: 2568 - notePitch * gridHeight,
+                                            width: Math.max(3, noteWidth),
+                                            length: noteLength,
+                                            start: noteStart,
+                                            end: noteEnd,
                                             highlighted: false,
                                             color: newTrack.color,
                                             id: notesInGrid.value.length + Date.now(),
                                             name: noteName + noteOctave,
                                             pitch: notePitch + 12,
-                                            length: noteLength, // In beats
-                                            start: Math.round(noteLeft / (256) * (960*4)), // In beats
-                                            end: Math.round(noteLeft / (256) * (960*4)) + noteLength, // In beats
                                             volume: noteVolume,
                                             track: newTrack
                                         };
@@ -2853,7 +2967,8 @@ export default {
             tryRemoveNote,
             importMidi,
             exportMidi,
-            copyToClipboard
+            copyToClipboard,
+            preserveHighNotes
         };
     }
 };

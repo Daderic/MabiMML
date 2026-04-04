@@ -283,31 +283,24 @@ export default {
 
             if (this.sortTracksByLength) {
                 selected.sort((a, b) => {
-                    const aIndex = this.tracks.indexOf(a);
-                    const bIndex = this.tracks.indexOf(b);
-                    return this.getRenderedTrackTokens(b, bIndex).rendered.length - this.getRenderedTrackTokens(a, aIndex).rendered.length;
+                    return this.getRenderedTrackTokens(b).rendered.length - 
+                           this.getRenderedTrackTokens(a).rendered.length;
                 });
             }
 
             const numParts = this.excludeSongPart ? 3 : 4;
-            const tokenized = selected.map(track => {
-                const index = this.tracks.indexOf(track);
-                return this.getRenderedTrackTokens(track, index).tokens;
-            });
             const rendered = selected.map(track => {
-                const index = this.tracks.indexOf(track);
-                return this.getRenderedTrackTokens(track, index).rendered;
+                return this.getRenderedTrackTokens(track).rendered;
             });
-
-            const availableRanks = [...this.composeRanks].reverse(); // lowest to highest
+            
             this.generatedScores = [];
 
             if (!this.jabSplit) {
                 // Attempt to fit the entire track set into the lowest viable rank
+                const availableRanks = [...this.composeRanks].reverse(); // lowest to highest
                 for (const rank of availableRanks) {
                     const limits = [rank.melody, rank.harmony1, rank.harmony2, rank.melody].slice(0, numParts);
                     const fits = rendered.every((mml, i) => mml.length <= limits[i]);
-
                     if (fits) {
                         this.generatedScores.push({ parts: rendered.slice(0, numParts), rank: rank.name });
                         break;
@@ -316,19 +309,14 @@ export default {
             } else {
                 const rank = this.selectedRank;
                 const limits = [rank.melody, rank.harmony1, rank.harmony2, rank.melody].slice(0, numParts);
-                const allSplitTokens = tokenized.map((tokens, i) => {
-                    return this.splitTokensByLimit(tokens, limits[i]);
-                });
-
-                const maxChunks = Math.max(...allSplitTokens.map(chunks => chunks.length));
+                const allSplitStrings = rendered.map((mml, i) => this.splitRenderedMML(mml, limits[i]));
+                const maxChunks = Math.max(...allSplitStrings.map(chunks => chunks.length));
 
                 for (let chunkIndex = 0; chunkIndex < maxChunks; chunkIndex++) {
                     const scoreParts = [];
-
                     for (let i = 0; i < numParts; i++) {
-                        const chunk = allSplitTokens[i]?.[chunkIndex] || [];
-                        const renderedChunk = this.renderTokens(chunk);
-                        scoreParts.push(renderedChunk);
+                        const chunk = allSplitStrings[i]?.[chunkIndex] || '';
+                        scoreParts.push(chunk);
                     }
 
                     const allEmpty = scoreParts.every(str => str === '');
@@ -338,6 +326,60 @@ export default {
                 }
 
             }
+        },
+        splitRenderedMML(rendered, limit) {
+            const tokenRegex = /T\d+|[Oo]\d+|[<>]|[Ll]\d+\.?|[Vv]\d+|[a-gA-G][+#-]?\d*\.?|[Rr]\d*\.?|N\d+|&/g;
+            let oct = 4, len = '4', vol = 8, tempo = 120;
+            let inTie = false;
+            let chunkStart = 0;
+            let lastCutPos = 0;
+            let stateAtLastCut = { oct, len, vol, tempo };
+            const chunks = [];
+            let match;
+
+            while ((match = tokenRegex.exec(rendered)) !== null) {
+                const token = match[0];
+                const tokenEnd = tokenRegex.lastIndex;
+                const currentChunkLen = tokenEnd - chunkStart;
+
+                if (currentChunkLen > limit && lastCutPos > chunkStart) {
+                    chunks.push(rendered.slice(chunkStart, lastCutPos));
+
+                    const s = stateAtLastCut;
+                    let pre = '';
+                    if (s.tempo !== 120) pre += `T${s.tempo}`;
+                    if (s.oct !== 4)     pre += `o${s.oct}`;
+                    if (s.len !== '4')   pre += `L${s.len}`;
+                    if (s.vol !== 8)     pre += `V${s.vol}`;
+
+                    rendered = rendered.slice(0, lastCutPos) + pre + rendered.slice(lastCutPos);
+                    chunkStart = lastCutPos;
+                    tokenRegex.lastIndex = lastCutPos + pre.length;
+                    oct = s.oct; len = s.len; vol = s.vol; tempo = s.tempo;
+                    inTie = false;
+                    continue;
+                }
+
+                if      (/^[Tt]/.test(token))        tempo = parseInt(token.slice(1));
+                else if (/^[Oo]\d/.test(token))      oct = parseInt(token.slice(1));
+                else if (token === '>')              oct = Math.min(8, oct + 1);
+                else if (token === '<')             oct = Math.max(0, oct - 1);
+                else if (/^[Ll]/.test(token))        len = token.slice(1);
+                else if (/^[Vv]/.test(token))        vol = parseInt(token.slice(1));
+                else if (token === '&')             inTie = true;
+                else if (/^[a-gA-GNRr]/.test(token)) {
+                    if (!inTie) {
+                        lastCutPos = tokenEnd;
+                        stateAtLastCut = { oct, len, vol, tempo };
+                    }
+                    inTie = false;
+                }
+            }
+
+            if (chunkStart < rendered.length)
+                chunks.push(rendered.slice(chunkStart));
+
+            return chunks;
         },
         copyScore(index) {
             const score = this.generatedScores[index];

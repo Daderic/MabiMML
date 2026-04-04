@@ -13,7 +13,7 @@
           <button class="close-button" @click="closeHelp">X</button>
           <div class="help-content" @click.stop>
             <h1>Help</h1>
-            <p class="credits">MOS v1.2</p>
+            <p class="credits">MOS v1.3</p>
 
             <h3>Navigating the Grid</h3>
             <ul>
@@ -116,11 +116,11 @@
 
             <h3>Track Splitting</h3>
             <ul>
-              <li>With a track selected, click the "Split Track" button. This will separate the track into multiple
-                other tracks (unless that number would exceed 16).</li>
-              <li>A track is split from left to right, then top to bottom. This can sometimes lead to weird splits.</li>
+              <li>With a track selected, click the "Auto-Split Track" button. This will separate the track into three monophonic tracks.</li>
+              <li>A track is split from left to right, then top to bottom, preserving either high or low notes based on the adjacent check box. This can sometimes lead to weird splits.</li>
               <li>The purpose of this feature is so that you can compose parts of your piece in a single track, then
-                split them up if you need to.</li>
+                split them up into a monophonic 3 track format if you need to.</li>
+              <li>This feature is experimental and may produce unwanted results. Use it with caution. </li>
             </ul>
 
             <h3>Exporting to MML</h3>
@@ -134,11 +134,14 @@
                 before export.</li>
               <li>The exported MML will be moderately optimized for length; they will not be perfectly optimized.</li>
               <li>Exported tracks are sorted by length by default, but this can be changed by unchecking the box.</li>
+              <li>Every exported track will include the tempo. This is useful for instruments like the Hand Chimes.</li>
               <li>When tracks are not sorted by length, they are sorted by the order in which they were selected.</li>
-              <li>In the future, tracks will be able to be split into separate Jabchiel-compatible scores based on the
-                rank you select. <strong>*Jabchiel export is currently non-functional*</strong>, but you can play with it
-                to see what is intended. 
-              </li>
+              <li>Checking "Split Score for Jabs" will split the selected tracks across multiple scores based on the
+                rank you select. Each score can then be performed sequentially to play the full song. This is useful for
+                songs that are too long or complex to fit in a single score, and allows lower-ranked composers to perform
+                pieces that would otherwise require a higher rank.</li>
+              <li>When using Jabchiel export, the implicit state (tempo, octave, length, and volume) is preserved across
+                score boundaries, so each new score will begin exactly where the previous one left off.</li>
             </ul>
 
             <h3>Importing MML</h3>
@@ -198,12 +201,11 @@
 
             <h3>Planned Features</h3>
             <ul>
-              <li>Jabchiel MML export.</li>
               <li>Undo/Redo functionality.</li>
-              <li>Other algorithm options for track splitting.</li>
               <li>Support for saving/loading "projects".</li>
-              <li>Better exported MML optimization.</li>
               <li>Improved note rendering speed.</li>
+              <li>Additional playback buttons.</li>
+              <li>Cleaner, more coherent UI.</li>
             </ul>
 
             <p class="credits">Credits: Made by Daderic</p>
