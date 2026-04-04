@@ -328,7 +328,7 @@ export default {
             }
         },
         splitRenderedMML(rendered, limit) {
-            const tokenRegex = /T\d+|[Oo]\d+|[<>]|[Ll]\d+\.?|[Vv]\d+|[a-gA-G][+#-]?\d*\.?|[Rr]\d*\.?|N\d+|&/g;
+            const tokenRegex = /T\d+|[Oo]\d+|[<>]|[Ll]\d+\.?|[Vv]\d+|[a-gA-G][+#-]?\d*\.?&?|[Rr]\d*\.?|N\d+|&/g;
             let oct = 4, len = '4', vol = 8, tempo = 120;
             let inTie = false;
             let chunkStart = 0;
@@ -369,8 +369,10 @@ export default {
                 else if (token === '&')             inTie = true;
                 else if (/^[a-gA-GNRr]/.test(token)) {
                     if (!inTie) {
-                        lastCutPos = tokenEnd;
-                        stateAtLastCut = { oct, len, vol, tempo };
+                        if (!token.endsWith('&')) {
+                            lastCutPos = tokenEnd;
+                            stateAtLastCut = { oct, len, vol, tempo };
+                        }
                     }
                     inTie = false;
                 }
