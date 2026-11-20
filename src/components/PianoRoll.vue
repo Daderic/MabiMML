@@ -184,6 +184,8 @@ export default {
             { name: 'Tuned Violin', program: 25, min: 16, max: 59 },
             { name: 'Tuned Cello', program: 26, min: 0, max: 46 },
             { name: 'Drum Kit', program: 27, min: 29, max: 53 },
+            { name: 'Gayageum', program: 28, min: 4, max: 99 },
+            { name: 'Bass', program: 29, min: 2, max: 91 },
             { name: 'Festival Lute', program: 50, min: 16, max: 88 },
             { name: 'Festival Ukulele', program: 51, min: 16, max: 88 },
             { name: 'Festival Mandolin', program: 52, min: 16, max: 88 },
@@ -546,7 +548,7 @@ export default {
 
         const loadSoundFont = async () => {
             try {
-                const response = await fetch(root + 'soundfonts/mabi_instruments_high_quality.sf3');
+                const response = await fetch(root + 'soundfonts/mabi_instruments_new_medium_quality.sf3');
                 const soundFontArrayBuffer = await response.arrayBuffer();
                 return soundFontArrayBuffer;
             } catch (error) {
@@ -1972,7 +1974,7 @@ export default {
                 const token = tokens[d];
                 const tl = token?.length;
                 const td = token?.dotted;
-                const lengthString = Math.floor((960 * 4) / tl * (td ? 1.5 : 1)) + (td ? '.' : '');
+                const lengthString = Math.round((960 * 4) / tl * (td ? 1.5 : 1)) + (td ? '.' : '');
                 let suffixLengthString = lengthString;
                 if (tl === u.implicitLen * 1.5 && td) {
                     suffixLengthString = '.';
@@ -2008,7 +2010,7 @@ export default {
                         if (token.name === 'b') {
                             octaveDiff = (token.octave+1) - u.implicitOct;
                             if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
+                                octaveString = `o${token.octave + 1}`;
                             } else {
                                 octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
                             }
@@ -2018,7 +2020,7 @@ export default {
                         if (token.name === 'c') {
                             octaveDiff = (token.octave-1) - u.implicitOct;
                             if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
+                                octaveString = `o${token.octave - 1}`;
                             } else {
                                 octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
                             }
@@ -2032,7 +2034,7 @@ export default {
                         if (token.name === 'b') {
                             octaveDiff = (token.octave+1) - u.implicitOct;
                             if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
+                                octaveString = `o${token.octave + 1}`;
                             } else {
                                 octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
                             }
@@ -2043,7 +2045,7 @@ export default {
                         if (token.name === 'c') {
                             octaveDiff = (token.octave-1) - u.implicitOct;
                             if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
+                                octaveString = `o${token.octave - 1}`;
                             } else {
                                 octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
                             }
@@ -2373,13 +2375,7 @@ export default {
                 });
             }
 
-            tokens.sort((a, b) => {
-                if (a.start - b.start === 0) {
-                    if (a.type === 'TEMPO')
-                        return -1
-                }
-                return a.start - b.start;
-            });
+            tokens.sort((a, b) => a.start - b.start || (b.type === 'TEMPO') - (a.type === 'TEMPO'));
 
             // Add Rests between notes and tempo markers
             for (let i = -1; i < tokens.length - 1; ++i) {

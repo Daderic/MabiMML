@@ -143,7 +143,7 @@ export default {
                     { name: 'C*', melody: 866, harmony1: 466, harmony2: 416 },
                     { name: 'D*', melody: 800, harmony1: 450, harmony2: 350 },
                     { name: 'E*', melody: 666, harmony1: 366, harmony2: 233 },
-                    { name: 'F*', melody: 553, harmony1: 333, harmony2: 233 },
+                    { name: 'F*', melody: 533, harmony1: 333, harmony2: 233 },
                     { name: 'Practice*', melody: 266, harmony1: 166, harmony2: 66 },
                 ];
             } else {
