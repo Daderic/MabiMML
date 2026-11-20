@@ -67,7 +67,15 @@
                             @mousedown="startNote(0, note, octave)" @mouseover="mouseOverNote(0, note, octave)"
                             @mouseup="endNote(0, note, octave)" @mouseleave="mouseLeaveNote(0, note, octave)" :style="{
                                 zIndex: note.isBlack ? 1 : 0,
-                                background: note.index + 12 * octave < instrKeyMin || note.index + 12 * octave > instrKeyMax ? '#d44' : (note.isBlack ? '#000' : '#fff')
+                                background: activePitches.has(note.index + 12 * (octave + 1))
+                                    ? `linear-gradient(${activePitches.get(note.index + 12 * (octave + 1))}, ${activePitches.get(note.index + 12 * (octave + 1))}), ${
+                                        note.index + 12 * octave < instrKeyMin || note.index + 12 * octave > instrKeyMax
+                                            ? '#d44'
+                                            : (note.isBlack ? '#000' : '#fff')
+                                    }`
+                                    : note.index + 12 * octave < instrKeyMin || note.index + 12 * octave > instrKeyMax
+                                        ? '#d44'
+                                        : (note.isBlack ? '#000' : '#fff')
                             }">
                             {{ note.name + octave }}
                         </div>
@@ -107,6 +115,17 @@
                     <canvas class="gridCanvas" ref="gridCanvas" :width="windowWidth * 0.9 - 14" :height="2592"
                         @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent="startNoteRemove"
                         @wheel="handleGridScroll" />
+
+                    <canvas class="overlayCanvas" ref="overlayCanvas" :width="windowWidth * 0.9 - 14" :height="2592"
+                        :style="{
+                            position: 'absolute',
+                            top: '0px',
+                            left: '0px',
+                            transform: `translateX(${scrollX}px)`,
+                            pointerEvents: 'none'
+                        }"
+                    />
+
                     <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
                 </div>
             </div>
@@ -143,6 +162,7 @@ export default {
         const loopSong = ref(false);
         const autoScrollSong = ref(false);
         const gridCanvas = ref(null);
+        const overlayCanvas = ref(null);
         const windowWidth = ref(window.innerWidth);
         const preserveHighNotes = ref(false);    // true = melody on top, false = bass on bottom
 
@@ -209,6 +229,9 @@ export default {
         const tempoMarkers = ref([]);
         const seq = ref(null);
         const isPlaying = ref(false);
+
+        const activeNotes = new Set();
+        const activePitches = ref(new Map());
 
         const zoomScalar = ref(1);
 
@@ -392,6 +415,27 @@ export default {
             }
         }
 
+        let overlayCtx = null;
+
+        function drawOverlay() {
+            if (!overlayCtx) return;
+            const screenLeft = scrollX.value;
+            const screenRight = screenLeft + window.innerWidth;
+            const height = 12 * 9 * gridHeight;
+
+            overlayCtx.clearRect(0, 0, screenRight, height);
+
+            // Draw a slightly transparent note-colored box over the row where notes are currently playing.
+            let usedTops = new Set();
+            for (const note of activeNotes) {
+                if (usedTops.has(note.top)) continue;
+                usedTops.add(note.top);
+                overlayCtx.fillStyle = hexToRgba(note.color, 0.2);
+                overlayCtx.fillRect(0, note.top, screenRight, gridHeight);
+            }
+
+        }
+
         function truncateTextToWidth(ctx, text, maxWidth) {
             const ellipsis = '…';
             if (ctx.measureText(text).width <= maxWidth) return text;
@@ -405,8 +449,6 @@ export default {
             }
             return '';
         }
-
-
 
         // Left-hand Piano notes, not grid notes
         const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -552,6 +594,10 @@ export default {
                 ctx = gridCanvas.value.getContext('2d', { alpha: false });
                 drawCanvasGrid();
             }
+            if (overlayCanvas.value) {
+                overlayCtx = overlayCanvas.value.getContext('2d', { alpha: true });
+                drawOverlay();
+            }
         });
 
 
@@ -624,13 +670,40 @@ export default {
         let markerStartPos;
         let startTempo;
         let tempoIdx = 0;
+        let notesByStart;
+        let notesByEnd;
 
         async function startMarkerAnim() {
             isPlaying.value = true;
             markerStartPos = markerPosition.value;
             startTempo = tempo.value;
             tempoMarkers.value.sort((a, b) => { return a.left - b.left });
+            const audibleNotes = notesInGrid.value.filter(n => !n.muted);
+            notesByStart = [...audibleNotes].sort((a, b) => a.left - b.left);
+            notesByEnd   = [...audibleNotes].sort((a, b) => (a.left + a.width) - (b.left + b.width));
             doMarkerAnim();
+        }
+
+        let startIndex = 0;
+        let endIndex = 0;
+        let changed = false;
+
+        function updateActive(marker) {
+            while (startIndex < notesByStart.length && notesByStart[startIndex].left <= marker) {
+                activeNotes.add(notesByStart[startIndex]);
+                const color = hexToRgba(notesByStart[startIndex].color, 0.5);
+                activePitches.value.set(notesByStart[startIndex].pitch, color);
+                startIndex++;
+                changed = true;
+            }
+            
+            while (endIndex < notesByEnd.length && (notesByEnd[endIndex].left + notesByEnd[endIndex].width) < marker) {
+                activeNotes.delete(notesByEnd[endIndex]);
+                activePitches.value.delete(notesByEnd[endIndex].pitch);
+                endIndex++;
+                changed = true;
+            }
+
         }
 
         function doMarkerAnim() {
@@ -673,6 +746,14 @@ export default {
                 }
                 if (seq.value && !loopSong.value)
                     seq.value.loop = loopSong.value;
+
+                // Get the currently active notes and put them into the "activeNotes" set
+                updateActive(markerPosition.value);
+                if (changed) {
+                    drawOverlay();
+                    changed = false;
+                }
+
             }
             clearInterval(markerInterval);
             tick();
@@ -816,9 +897,15 @@ export default {
         }
 
 
-        const stopMarkerAnim = () => {
+        const stopMarkerAnim = async () => {
             clearInterval(markerInterval);
             isPlaying.value = false;
+            activeNotes.clear();
+            activePitches.value.clear();
+            startIndex = 0;
+            endIndex = 0;
+            changed = false;
+            drawOverlay();
         }
 
         const updateMarkerPos = (clientX, altKey, fromClick) => {
@@ -1018,8 +1105,8 @@ export default {
             if (gridWrapper.value && ruler.value) {
                 scrollX.value = gridWrapper.value.scrollLeft;
                 ruler.value.style.left = -scrollX.value + 'px'; // Adjust ruler's left position
+                drawCanvasGrid();
             }
-            drawCanvasGrid();
         }
 
         function stopPlaying() {
@@ -2961,6 +3048,7 @@ export default {
             autoScrollSong,
             parseMMLFromClipboard,
             gridCanvas,
+            overlayCanvas,
             windowWidth,
             scrollX,
             gridWrapper,
@@ -2968,7 +3056,8 @@ export default {
             importMidi,
             exportMidi,
             copyToClipboard,
-            preserveHighNotes
+            preserveHighNotes,
+            activePitches
         };
     }
 };
@@ -3022,7 +3111,7 @@ export default {
     flex-direction: column-reverse;
     padding-bottom: 18px;
     /* Higher notes at the top */
-    z-index: 12;
+    z-index: 13;
 }
 
 .octave {
@@ -3097,7 +3186,7 @@ export default {
     align-items: end;
     font-size: 12px;
     color: #333;
-    z-index: 11;
+    z-index: 12;
     user-select: none;
     cursor: pointer;
 }
@@ -3328,6 +3417,13 @@ export default {
     margin-top: 30px;
     display: block;
     z-index: 10;
+    left: 0px;
+}
+
+.overlayCanvas {
+    margin-top: 30px;
+    display: block;
+    z-index: 11;
     left: 0px;
 }
 </style>
