@@ -146,7 +146,7 @@ import { _ } from 'core-js';
 import TempoMarker from './TempoMarker.vue';
 import ExportMenu from './ExportMenu.vue';
 import { optimDijkstra, getOptimalNoteLengths, tokenizeMML, getEnharmonicEquivalent } from '@/mml/optimizer.js';
-import { createHistory } from '@/history.js';
+import { createHistory, describeChange } from '@/history.js';
 
 export default {
     name: 'PianoRoll',
@@ -342,24 +342,30 @@ export default {
                 || volumeChangingNotes.value.length > 0 || isSelecting.value;
         }
 
+        const programName = p => instruments.value.find(i => i.program === p )?.name ?? `program ${p}`;
+
         function undo() {
             if (editInProgress()) return;
             clearTimeout(commitTimer);
             commitHistory();
+            const leaving = history.current;
             const s = history.undo();
-            if (!s) return;
+            if (!s) { showFailureMessage('Nothing to undo', 800); return; }
             applyState(s);
             refreshUndoFlags();
+            showSuccessMessage(`Undid: ${describeChange(s, leaving, programName)}`, 1500);
         }
 
         function redo() {
             if (editInProgress()) return;
             clearTimeout(commitTimer);
             commitHistory();
+            const leaving = history.current;
             const s = history.redo();
-            if (!s) return;
+            if (!s) { showFailureMessage('Nothing to redo', 800); return; }
             applyState(s);
             refreshUndoFlags();
+            showSuccessMessage(`Redid: ${describeChange(leaving, s, programName)}`, 1500);
         }
 
         function onGridMouseUp(event) {
@@ -1275,12 +1281,13 @@ export default {
             }
         };
 
+        let successTimer = null, failureTimer = null;
         const showSuccessMessage = (text, timeout = 2000) => {
             successNotificationText.value = text;
             showSuccessNotification.value = true; // Show notification
-
+            clearTimeout(successTimer);
             // Hide notification after 2 seconds
-            setTimeout(() => {
+            successTimer = setTimeout(() => {
                 showSuccessNotification.value = false;
             }, timeout);
         };
@@ -1288,9 +1295,9 @@ export default {
         const showFailureMessage = (text, timeout = 2000) => {
             failedNotificationText.value = text;
             showFailedNotification.value = true; // Show notification
-
+            clearTimeout(failureTimer);
             // Hide notification after 2 seconds
-            setTimeout(() => {
+            failureTimer = setTimeout(() => {
                 showFailedNotification.value = false;
             }, timeout);
         };
