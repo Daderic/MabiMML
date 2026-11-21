@@ -197,11 +197,11 @@
               <li>Click and drag on the timeline to move the marker.</li>
               <li>If you hold <strong>ALT</strong> while dragging, the marker will move freely.</li>
               <li>You can change instruments using the spinner at the top left of the page.</li>
+              <li>Press <strong>Ctrl+Z</strong> to undo and <strong>Ctrl+Y</strong> (or <strong>Ctrl+Shift+Z</strong>) to redo.</li>
             </ul>
 
             <h3>Planned Features</h3>
             <ul>
-              <li>Undo/Redo functionality.</li>
               <li>Support for saving/loading "projects".</li>
               <li>Improved note rendering speed.</li>
               <li>Additional playback buttons.</li>

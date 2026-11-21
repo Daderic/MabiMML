@@ -40,6 +40,8 @@
                 Favor High Notes
             </label>
             <!--<button class="MML-converter" @click="genTokensOutright" style="margin-left: 10px;">Gen MML</button>-->
+            <button @click="undo" :disabled="!canUndo" style="margin-left: 10px;">Undo</button>
+            <button @click="redo" :disabled="!canRedo">Redo</button>
             <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
             <button @click="importMidi" style="margin-left: 10px;">Import MIDI</button>
             <button @click="exportMidi" style="margin-left: 10px;">Export MIDI (WIP)</button>
@@ -113,8 +115,8 @@
                 <div class="grid" ref="grid" :style="{ width: gridSpan * zoomScalar + 'px', height: 2622 + 'px' }">
                     <div :style="{ width: scrollX + 'px' }" />
                     <canvas class="gridCanvas" ref="gridCanvas" :width="windowWidth * 0.9 - 14" :height="2592"
-                        @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent="startNoteRemove"
-                        @wheel="handleGridScroll" />
+                        @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent
+                        @wheel="handleGridScroll" @mouseup="onGridMouseUp" />
 
                     <canvas class="overlayCanvas" ref="overlayCanvas" :width="windowWidth * 0.9 - 14" :height="2592"
                         :style="{
@@ -144,6 +146,7 @@ import { _ } from 'core-js';
 import TempoMarker from './TempoMarker.vue';
 import ExportMenu from './ExportMenu.vue';
 import { optimDijkstra, getOptimalNoteLengths, tokenizeMML, getEnharmonicEquivalent } from '@/mml/optimizer.js';
+import { createHistory } from '@/history.js';
 
 export default {
     name: 'PianoRoll',
@@ -237,6 +240,133 @@ export default {
         const activePitches = ref(new Map());
 
         const zoomScalar = ref(1);
+
+        // UNDO/REDO HISTORY STUFF
+        const history = createHistory(100);
+        const canUndo = ref(false);
+        const canRedo = ref(false);
+        let commitQueued = false;
+        let commitTimer = null;
+
+        function captureState() {
+            return {
+                tracks: tracks.value.map(track => ({
+                    id: track.id,
+                    name: track.name,
+                    color: track.color,
+                    program: track.instrument ? track.instrument.program : 0
+                })),
+                notes: notesInGrid.value.map(note => ({
+                    id: note.id, name: note.name, left: note.left, top: note.top, pitch: note.pitch, width: note.width,
+                    length: note.length, start: note.start, end: note.end, volume: note.volume,
+                    trackId: note.track ? note.track.id : null
+                })),
+                tempoMarkers: tempoMarkers.value
+                    .map(marker => ({ left: marker.left, tempo: marker.tempo, trackId: marker.parentTrack ? marker.parentTrack.id : null }))
+                    .sort((a, b) => a.left - b.left || a.tempo - b.tempo || a.trackId - b.trackId)
+            };
+        }
+
+        function applyState(s) {
+            if (!s || s.tracks.length === 0) return;
+
+            const existing = new Map(tracks.value.map(t => [t.id, t]));
+            tracks.value = s.tracks.map(ts => {
+                const t = existing.get(ts.id) || { id: ts.id, isMuted: false, isEditingName: false };
+                t.name = ts.name;
+                t.color = ts.color;
+                t.instrument = instruments.value.find(i => i.program === ts.program) || t.instrument || instruments.value[0];
+                t.notes = [];
+                return t;
+            });
+
+            const byId = new Map(tracks.value.map(t => [t.id, t]));
+            const restored = [];
+            for (const ns of s.notes) {
+                const track = byId.get(ns.trackId);
+                if (!track) continue;
+                const note = {
+                    id: ns.id, name: ns.name, left: ns.left, top: ns.top, pitch: ns.pitch, width: ns.width,
+                    length: ns.length, start: ns.start, end: ns.end, volume: ns.volume,
+                    highlighted: false, color: track.color, muted: track.isMuted, track
+                };
+                restored.push(note);
+                track.notes.push(note);
+            }
+            notesInGrid.value = restored;
+            selectedNotes.value = [];
+
+            tempoMarkers.value = s.tempoMarkers
+                .filter(m => byId.has(m.trackId))
+                .map(m => {
+                    const track = byId.get(m.trackId);
+                    return { left: m.left, tempo: m.tempo, color: track.color, parentTrack: track, muted: track.isMuted };
+                });
+
+            const idx = Math.min(Math.max(selectedTrackIndex.value ?? 0, 0), tracks.value.length - 1);
+            selectedTrackIndex.value = idx;
+            trackHexColor.value = tracks.value[idx].color;
+            handleTrackSelected(tracks.value[idx]);
+
+            if (isPlaying.value)
+                playSequence();
+
+        }
+
+        function refreshUndoFlags() {
+            canUndo.value = history.canUndo;
+            canRedo.value = history.canRedo;
+        }
+
+        function commitHistory() {
+            if (history.commit(captureState()))
+                refreshUndoFlags();
+        }
+
+        function scheduleCommit() {
+            if (commitQueued) return;
+            commitQueued = true;
+            queueMicrotask(() => {
+                commitQueued = false;
+                commitHistory();
+            });
+        }
+
+        function scheduleCommitDebounced(ms = 400) {
+            clearTimeout(commitTimer);
+            commitTimer = setTimeout(commitHistory, ms);
+        }
+
+        function editInProgress() {
+            return draggingNotes.value.length > 0 || resizingNotes.value.length > 0
+                || volumeChangingNotes.value.length > 0 || isSelecting.value;
+        }
+
+        function undo() {
+            if (editInProgress()) return;
+            clearTimeout(commitTimer);
+            commitHistory();
+            const s = history.undo();
+            if (!s) return;
+            applyState(s);
+            refreshUndoFlags();
+        }
+
+        function redo() {
+            if (editInProgress()) return;
+            clearTimeout(commitTimer);
+            commitHistory();
+            const s = history.redo();
+            if (!s) return;
+            applyState(s);
+            refreshUndoFlags();
+        }
+
+        function onGridMouseUp(event) {
+            if (event.button === 2) scheduleCommit();
+        }
+
+        // END OF UNDO/REDO HISTORY STUFF
 
         const rectangleStyle = computed(() => ({
             left: `${Math.min(startX.value, currentX.value)}px`,
@@ -507,6 +637,7 @@ export default {
         const handleAddTrack = async (newTrack, index) => {
             // if (synth.value)
             //     await synth.value.soundfontManager.addNewSoundFont(newTrack.instrument, `main${index}`, index);
+            scheduleCommit();
         };
 
         const handleRemoveTrack = async (oldTrack, newTrack) => {
@@ -525,6 +656,7 @@ export default {
             //     selectedInstrument.value = newTrack.instrument;
             // if (synth.value)
             //     await synth.value.soundfontManager.deleteSoundFont(`main${index}`);
+            scheduleCommit();
         };
 
         const handleMuteTrack = async (trackIndex) => {
@@ -545,6 +677,7 @@ export default {
                     marker.color = newColor;
                 }
             }
+            scheduleCommitDebounced();
         };
 
         const loadSoundFont = async () => {
@@ -566,6 +699,9 @@ export default {
         }
 
         onMounted(async () => {
+            history.reset(captureState());
+            refreshUndoFlags();
+
             try {
                 windowWidth.value = window.innerWidth;
 
@@ -631,6 +767,7 @@ export default {
                     parentTrack: selectedTrack.value,
                     muted: false
                 });
+                scheduleCommit();
             }
         };
 
@@ -642,12 +779,15 @@ export default {
                     return;
                 if (!isNaN(enteredTempo) && enteredTempo !== '') {
                     tempoMarkers.value[index].tempo = Number(enteredTempo);
+                    scheduleCommit();
                 } else {
                     tempoMarkers.value.splice(index, 1);
+                    scheduleCommit();
                 }
             } else if (event.button === 2) {
                 tempoMarkers.value[index].parentTrack = selectedTrack.value;
                 tempoMarkers.value[index].color = selectedTrack.value.color;
+                scheduleCommit();
             }
         };
 
@@ -797,10 +937,34 @@ export default {
         function handleKeyPress(event) {
             if (selectedTrack.value.isEditingName)
                 return;
+
+            const mod = event.ctrlKey || event.metaKey;
+
+            if (mod && !event.altKey) {
+                const el = event.target;
+                const typing = el && (el.tagName === 'TEXTAREA'
+                    || (el.tagName === 'INPUT' && ['text', 'number', 'search', 'email', 'password', 'url'].includes(el.type)));
+                if (!typing) {
+                    const k = event.key.toLowerCase();
+                    if (k === 'z') {
+                        event.preventDefault();
+                        if (event.shiftKey) redo(); else undo();
+                        return;
+                    }
+                    if (k === 'y') {
+                        event.preventDefault();
+                        redo();
+                        return;
+                    }
+                }
+            }
+
             if (event.key === 'Backspace' || event.key === 'Delete') {
                 for (const note of selectedNotes.value) {
                     removeNote(note, true);
                 }
+
+                scheduleCommit();
 
                 if (isPlaying.value)
                     playSequence();
@@ -836,6 +1000,7 @@ export default {
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -853,6 +1018,7 @@ export default {
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -868,6 +1034,7 @@ export default {
                         note.start = Math.round(note.left / (256) * (960*4));
                         note.end = Math.round(note.start + note.length);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -880,6 +1047,7 @@ export default {
                         note.start = Math.round(note.left / (256) * (960*4));
                         note.end = Math.round(note.start + note.length);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -900,6 +1068,7 @@ export default {
                     noteClipboard.push(note);
                     removeNote(note, true);
                 }
+                scheduleCommit();
                 if (isPlaying.value)
                     playSequence();
                 showSuccessMessage(`Cut ${noteClipboard.length} note${noteClipboard.length > 1 ? 's' : ''} and put them in the clipboard!`, 1000);
@@ -944,6 +1113,7 @@ export default {
                 selectedNotes.value.push(...newNotes);
                 notesInGrid.value.push(...newNotes);
                 track.notes.unshift(...newNotes.reverse()); // unshift in correct order
+                scheduleCommit();
                 if (isPlaying.value)
                     playSequence();
 
@@ -961,7 +1131,7 @@ export default {
                 });
 
                 selectedTrack.value.notes.unshift(...[...selectedNotes.value].reverse());
-
+                scheduleCommit();
                 showSuccessMessage(`Moved ${selectedNotes.value.length} notes into track "${selectedTrack.value.name}"!`, 1000);
             }
         }
@@ -1148,6 +1318,8 @@ export default {
                 if (isPlaying.value && !fromTrack)
                     playSequence();
 
+                if (!fromTrack) scheduleCommit();
+
                 await synth.value.isReady;
             }
         };
@@ -1323,6 +1495,7 @@ export default {
             document.removeEventListener('mousemove', onDrag);
             document.removeEventListener('mouseup', endDrag);
             startPositions.clear();
+            scheduleCommit();
         };
 
         const startResizeData = new Map();
@@ -1397,6 +1570,7 @@ export default {
             startResizeData.clear();
             document.removeEventListener('mousemove', onResize);
             document.removeEventListener('mouseup', endResize);
+            scheduleCommit();
         };
 
         let startingNoteVolumes = [];
@@ -1442,6 +1616,7 @@ export default {
                 playSequence();
             document.removeEventListener('mousemove', onVolumeChange);
             document.removeEventListener('mouseup', endVolumeChange);
+            scheduleCommit();
         };
 
         const handleGridClick = (event) => {
@@ -2476,7 +2651,12 @@ export default {
             exportMidi,
             copyToClipboard,
             preserveHighNotes,
-            activePitches
+            activePitches,
+            undo,
+            redo,
+            canUndo,
+            canRedo,
+            onGridMouseUp
         };
     }
 };
