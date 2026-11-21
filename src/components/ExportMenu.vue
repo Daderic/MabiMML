@@ -74,6 +74,7 @@
 
 <script>
 import { consoleColors } from 'spessasynth_lib';
+import { splitRenderedMML } from '@/mml/optimizer';
 
 export default {
     props: {
@@ -143,7 +144,7 @@ export default {
                     { name: 'C*', melody: 866, harmony1: 466, harmony2: 416 },
                     { name: 'D*', melody: 800, harmony1: 450, harmony2: 350 },
                     { name: 'E*', melody: 666, harmony1: 366, harmony2: 233 },
-                    { name: 'F*', melody: 553, harmony1: 333, harmony2: 233 },
+                    { name: 'F*', melody: 533, harmony1: 333, harmony2: 233 },
                     { name: 'Practice*', melody: 266, harmony1: 166, harmony2: 66 },
                 ];
             } else {
@@ -245,39 +246,6 @@ export default {
             this.tokenCache.set(track, result);
             return result;
         },
-        splitTokensByLimit(tokens, limit) {
-            const chunks = [];
-            let current = [];
-            let length = 0;
-
-            for (let i = 0; i < tokens.length; i++) {
-                const next = [...current, tokens[i]];
-                const rendered = this.renderTokens(next);
-                const renderedLength = rendered.length;
-
-                if (renderedLength > limit) {
-                    if (current.length) {
-                        chunks.push(current);
-                        current = [tokens[i]];
-                        length = this.renderTokens(current).length;
-                    } else {
-                        // Single token too big: force split anyway
-                        chunks.push([tokens[i]]);
-                        current = [];
-                        length = 0;
-                    }
-                } else {
-                    current.push(tokens[i]);
-                    length = renderedLength;
-                }
-            }
-
-            if (current.length) {
-                chunks.push(current);
-            }
-
-            return chunks;
-        },
         generateScores() {
             const selected = [...this.selectedTracks];
 
@@ -309,7 +277,7 @@ export default {
             } else {
                 const rank = this.selectedRank;
                 const limits = [rank.melody, rank.harmony1, rank.harmony2, rank.melody].slice(0, numParts);
-                const allSplitStrings = rendered.map((mml, i) => this.splitRenderedMML(mml, limits[i]));
+                const allSplitStrings = rendered.map((mml, i) => splitRenderedMML(mml, limits[i]));
                 const maxChunks = Math.max(...allSplitStrings.map(chunks => chunks.length));
 
                 for (let chunkIndex = 0; chunkIndex < maxChunks; chunkIndex++) {
@@ -326,62 +294,6 @@ export default {
                 }
 
             }
-        },
-        splitRenderedMML(rendered, limit) {
-            const tokenRegex = /T\d+|[Oo]\d+|[<>]|[Ll]\d+\.?|[Vv]\d+|[a-gA-G][+#-]?\d*\.?&?|[Rr]\d*\.?|N\d+|&/g;
-            let oct = 4, len = '4', vol = 8, tempo = 120;
-            let inTie = false;
-            let chunkStart = 0;
-            let lastCutPos = 0;
-            let stateAtLastCut = { oct, len, vol, tempo };
-            const chunks = [];
-            let match;
-
-            while ((match = tokenRegex.exec(rendered)) !== null) {
-                const token = match[0];
-                const tokenEnd = tokenRegex.lastIndex;
-                const currentChunkLen = tokenEnd - chunkStart;
-
-                if (currentChunkLen > limit && lastCutPos > chunkStart) {
-                    chunks.push(rendered.slice(chunkStart, lastCutPos));
-
-                    const s = stateAtLastCut;
-                    let pre = '';
-                    if (s.tempo !== 120) pre += `T${s.tempo}`;
-                    if (s.oct !== 4)     pre += `o${s.oct}`;
-                    if (s.len !== '4')   pre += `L${s.len}`;
-                    if (s.vol !== 8)     pre += `V${s.vol}`;
-
-                    rendered = rendered.slice(0, lastCutPos) + pre + rendered.slice(lastCutPos);
-                    chunkStart = lastCutPos;
-                    tokenRegex.lastIndex = lastCutPos + pre.length;
-                    oct = s.oct; len = s.len; vol = s.vol; tempo = s.tempo;
-                    inTie = false;
-                    continue;
-                }
-
-                if      (/^[Tt]/.test(token))        tempo = parseInt(token.slice(1));
-                else if (/^[Oo]\d/.test(token))      oct = parseInt(token.slice(1));
-                else if (token === '>')              oct = Math.min(8, oct + 1);
-                else if (token === '<')             oct = Math.max(0, oct - 1);
-                else if (/^[Ll]/.test(token))        len = token.slice(1);
-                else if (/^[Vv]/.test(token))        vol = parseInt(token.slice(1));
-                else if (token === '&')             inTie = true;
-                else if (/^[a-gA-GNRr]/.test(token)) {
-                    if (!inTie) {
-                        if (!token.endsWith('&')) {
-                            lastCutPos = tokenEnd;
-                            stateAtLastCut = { oct, len, vol, tempo };
-                        }
-                    }
-                    inTie = false;
-                }
-            }
-
-            if (chunkStart < rendered.length)
-                chunks.push(rendered.slice(chunkStart));
-
-            return chunks;
         },
         copyScore(index) {
             const score = this.generatedScores[index];

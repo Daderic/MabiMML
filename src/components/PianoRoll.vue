@@ -40,6 +40,8 @@
                 Favor High Notes
             </label>
             <!--<button class="MML-converter" @click="genTokensOutright" style="margin-left: 10px;">Gen MML</button>-->
+            <button @click="undo" :disabled="!canUndo" style="margin-left: 10px;">Undo</button>
+            <button @click="redo" :disabled="!canRedo">Redo</button>
             <button @click="parseMMLFromClipboard" style="margin-left: 10px;">Import MML From Clipboard</button>
             <button @click="importMidi" style="margin-left: 10px;">Import MIDI</button>
             <button @click="exportMidi" style="margin-left: 10px;">Export MIDI (WIP)</button>
@@ -67,7 +69,15 @@
                             @mousedown="startNote(0, note, octave)" @mouseover="mouseOverNote(0, note, octave)"
                             @mouseup="endNote(0, note, octave)" @mouseleave="mouseLeaveNote(0, note, octave)" :style="{
                                 zIndex: note.isBlack ? 1 : 0,
-                                background: note.index + 12 * octave < instrKeyMin || note.index + 12 * octave > instrKeyMax ? '#d44' : (note.isBlack ? '#000' : '#fff')
+                                background: activePitches.has(note.index + 12 * (octave + 1))
+                                    ? `linear-gradient(${activePitches.get(note.index + 12 * (octave + 1))}, ${activePitches.get(note.index + 12 * (octave + 1))}), ${
+                                        note.index + 12 * octave < instrKeyMin || note.index + 12 * octave > instrKeyMax
+                                            ? '#d44'
+                                            : (note.isBlack ? '#000' : '#fff')
+                                    }`
+                                    : note.index + 12 * octave < instrKeyMin || note.index + 12 * octave > instrKeyMax
+                                        ? '#d44'
+                                        : (note.isBlack ? '#000' : '#fff')
                             }">
                             {{ note.name + octave }}
                         </div>
@@ -105,8 +115,19 @@
                 <div class="grid" ref="grid" :style="{ width: gridSpan * zoomScalar + 'px', height: 2622 + 'px' }">
                     <div :style="{ width: scrollX + 'px' }" />
                     <canvas class="gridCanvas" ref="gridCanvas" :width="windowWidth * 0.9 - 14" :height="2592"
-                        @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent="startNoteRemove"
-                        @wheel="handleGridScroll" />
+                        @mousemove="tryRemoveNote" @mousedown="handleGridClick" @contextmenu.prevent
+                        @wheel="handleGridScroll" @mouseup="onGridMouseUp" />
+
+                    <canvas class="overlayCanvas" ref="overlayCanvas" :width="windowWidth * 0.9 - 14" :height="2592"
+                        :style="{
+                            position: 'absolute',
+                            top: '0px',
+                            left: '0px',
+                            transform: `translateX(${scrollX}px)`,
+                            pointerEvents: 'none'
+                        }"
+                    />
+
                     <div v-if="isSelecting" class="selection-rect" :style="rectangleStyle"></div>
                 </div>
             </div>
@@ -124,6 +145,8 @@ import { selectedTrack, tracks, selectedTrackIndex, trackHexColor, EventBus } fr
 import { _ } from 'core-js';
 import TempoMarker from './TempoMarker.vue';
 import ExportMenu from './ExportMenu.vue';
+import { optimDijkstra, getOptimalNoteLengths, tokenizeMML, getEnharmonicEquivalent } from '@/mml/optimizer.js';
+import { createHistory, describeChange } from '@/history.js';
 
 export default {
     name: 'PianoRoll',
@@ -143,6 +166,7 @@ export default {
         const loopSong = ref(false);
         const autoScrollSong = ref(false);
         const gridCanvas = ref(null);
+        const overlayCanvas = ref(null);
         const windowWidth = ref(window.innerWidth);
         const preserveHighNotes = ref(false);    // true = melody on top, false = bass on bottom
 
@@ -164,6 +188,8 @@ export default {
             { name: 'Tuned Violin', program: 25, min: 16, max: 59 },
             { name: 'Tuned Cello', program: 26, min: 0, max: 46 },
             { name: 'Drum Kit', program: 27, min: 29, max: 53 },
+            { name: 'Gayageum', program: 28, min: 4, max: 99 },
+            { name: 'Bass', program: 29, min: 2, max: 91 },
             { name: 'Festival Lute', program: 50, min: 16, max: 88 },
             { name: 'Festival Ukulele', program: 51, min: 16, max: 88 },
             { name: 'Festival Mandolin', program: 52, min: 16, max: 88 },
@@ -210,7 +236,143 @@ export default {
         const seq = ref(null);
         const isPlaying = ref(false);
 
+        const activeNotes = new Set();
+        const activePitches = ref(new Map());
+
         const zoomScalar = ref(1);
+
+        // UNDO/REDO HISTORY STUFF
+        const history = createHistory(100);
+        const canUndo = ref(false);
+        const canRedo = ref(false);
+        let commitQueued = false;
+        let commitTimer = null;
+
+        function captureState() {
+            return {
+                tracks: tracks.value.map(track => ({
+                    id: track.id,
+                    name: track.name,
+                    color: track.color,
+                    program: track.instrument ? track.instrument.program : 0
+                })),
+                notes: notesInGrid.value.map(note => ({
+                    id: note.id, name: note.name, left: note.left, top: note.top, pitch: note.pitch, width: note.width,
+                    length: note.length, start: note.start, end: note.end, volume: note.volume,
+                    trackId: note.track ? note.track.id : null
+                })),
+                tempoMarkers: tempoMarkers.value
+                    .map(marker => ({ left: marker.left, tempo: marker.tempo, trackId: marker.parentTrack ? marker.parentTrack.id : null }))
+                    .sort((a, b) => a.left - b.left || a.tempo - b.tempo || a.trackId - b.trackId)
+            };
+        }
+
+        function applyState(s) {
+            if (!s || s.tracks.length === 0) return;
+
+            const existing = new Map(tracks.value.map(t => [t.id, t]));
+            tracks.value = s.tracks.map(ts => {
+                const t = existing.get(ts.id) || { id: ts.id, isMuted: false, isEditingName: false };
+                t.name = ts.name;
+                t.color = ts.color;
+                t.instrument = instruments.value.find(i => i.program === ts.program) || t.instrument || instruments.value[0];
+                t.notes = [];
+                return t;
+            });
+
+            const byId = new Map(tracks.value.map(t => [t.id, t]));
+            const restored = [];
+            for (const ns of s.notes) {
+                const track = byId.get(ns.trackId);
+                if (!track) continue;
+                const note = {
+                    id: ns.id, name: ns.name, left: ns.left, top: ns.top, pitch: ns.pitch, width: ns.width,
+                    length: ns.length, start: ns.start, end: ns.end, volume: ns.volume,
+                    highlighted: false, color: track.color, muted: track.isMuted, track
+                };
+                restored.push(note);
+                track.notes.push(note);
+            }
+            notesInGrid.value = restored;
+            selectedNotes.value = [];
+
+            tempoMarkers.value = s.tempoMarkers
+                .filter(m => byId.has(m.trackId))
+                .map(m => {
+                    const track = byId.get(m.trackId);
+                    return { left: m.left, tempo: m.tempo, color: track.color, parentTrack: track, muted: track.isMuted };
+                });
+
+            const idx = Math.min(Math.max(selectedTrackIndex.value ?? 0, 0), tracks.value.length - 1);
+            selectedTrackIndex.value = idx;
+            trackHexColor.value = tracks.value[idx].color;
+            handleTrackSelected(tracks.value[idx]);
+
+            if (isPlaying.value)
+                playSequence();
+
+        }
+
+        function refreshUndoFlags() {
+            canUndo.value = history.canUndo;
+            canRedo.value = history.canRedo;
+        }
+
+        function commitHistory() {
+            if (history.commit(captureState()))
+                refreshUndoFlags();
+        }
+
+        function scheduleCommit() {
+            if (commitQueued) return;
+            commitQueued = true;
+            queueMicrotask(() => {
+                commitQueued = false;
+                commitHistory();
+            });
+        }
+
+        function scheduleCommitDebounced(ms = 400) {
+            clearTimeout(commitTimer);
+            commitTimer = setTimeout(commitHistory, ms);
+        }
+
+        function editInProgress() {
+            return draggingNotes.value.length > 0 || resizingNotes.value.length > 0
+                || volumeChangingNotes.value.length > 0 || isSelecting.value;
+        }
+
+        const programName = p => instruments.value.find(i => i.program === p )?.name ?? `program ${p}`;
+
+        function undo() {
+            if (editInProgress()) return;
+            clearTimeout(commitTimer);
+            commitHistory();
+            const leaving = history.current;
+            const s = history.undo();
+            if (!s) { showFailureMessage('Nothing to undo', 800); return; }
+            applyState(s);
+            refreshUndoFlags();
+            showSuccessMessage(`Undid: ${describeChange(s, leaving, programName)}`, 1500);
+        }
+
+        function redo() {
+            if (editInProgress()) return;
+            clearTimeout(commitTimer);
+            commitHistory();
+            const leaving = history.current;
+            const s = history.redo();
+            if (!s) { showFailureMessage('Nothing to redo', 800); return; }
+            applyState(s);
+            refreshUndoFlags();
+            showSuccessMessage(`Redid: ${describeChange(leaving, s, programName)}`, 1500);
+        }
+
+        function onGridMouseUp(event) {
+            if (event.button === 2) scheduleCommit();
+        }
+
+        // END OF UNDO/REDO HISTORY STUFF
 
         const rectangleStyle = computed(() => ({
             left: `${Math.min(startX.value, currentX.value)}px`,
@@ -392,6 +554,27 @@ export default {
             }
         }
 
+        let overlayCtx = null;
+
+        function drawOverlay() {
+            if (!overlayCtx) return;
+            const screenLeft = scrollX.value;
+            const screenRight = screenLeft + window.innerWidth;
+            const height = 12 * 9 * gridHeight;
+
+            overlayCtx.clearRect(0, 0, screenRight, height);
+
+            // Draw a slightly transparent note-colored box over the row where notes are currently playing.
+            let usedTops = new Set();
+            for (const note of activeNotes) {
+                if (usedTops.has(note.top)) continue;
+                usedTops.add(note.top);
+                overlayCtx.fillStyle = hexToRgba(note.color, 0.2);
+                overlayCtx.fillRect(0, note.top, screenRight, gridHeight);
+            }
+
+        }
+
         function truncateTextToWidth(ctx, text, maxWidth) {
             const ellipsis = '…';
             if (ctx.measureText(text).width <= maxWidth) return text;
@@ -405,8 +588,6 @@ export default {
             }
             return '';
         }
-
-
 
         // Left-hand Piano notes, not grid notes
         const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -462,6 +643,7 @@ export default {
         const handleAddTrack = async (newTrack, index) => {
             // if (synth.value)
             //     await synth.value.soundfontManager.addNewSoundFont(newTrack.instrument, `main${index}`, index);
+            scheduleCommit();
         };
 
         const handleRemoveTrack = async (oldTrack, newTrack) => {
@@ -480,6 +662,7 @@ export default {
             //     selectedInstrument.value = newTrack.instrument;
             // if (synth.value)
             //     await synth.value.soundfontManager.deleteSoundFont(`main${index}`);
+            scheduleCommit();
         };
 
         const handleMuteTrack = async (trackIndex) => {
@@ -500,11 +683,12 @@ export default {
                     marker.color = newColor;
                 }
             }
+            scheduleCommitDebounced();
         };
 
         const loadSoundFont = async () => {
             try {
-                const response = await fetch(root + 'soundfonts/mabi_instruments_high_quality.sf3');
+                const response = await fetch(root + 'soundfonts/mabi_instruments_new_medium_quality.sf3');
                 const soundFontArrayBuffer = await response.arrayBuffer();
                 return soundFontArrayBuffer;
             } catch (error) {
@@ -521,6 +705,9 @@ export default {
         }
 
         onMounted(async () => {
+            history.reset(captureState());
+            refreshUndoFlags();
+
             try {
                 windowWidth.value = window.innerWidth;
 
@@ -552,6 +739,10 @@ export default {
                 ctx = gridCanvas.value.getContext('2d', { alpha: false });
                 drawCanvasGrid();
             }
+            if (overlayCanvas.value) {
+                overlayCtx = overlayCanvas.value.getContext('2d', { alpha: true });
+                drawOverlay();
+            }
         });
 
 
@@ -582,6 +773,7 @@ export default {
                     parentTrack: selectedTrack.value,
                     muted: false
                 });
+                scheduleCommit();
             }
         };
 
@@ -593,12 +785,15 @@ export default {
                     return;
                 if (!isNaN(enteredTempo) && enteredTempo !== '') {
                     tempoMarkers.value[index].tempo = Number(enteredTempo);
+                    scheduleCommit();
                 } else {
                     tempoMarkers.value.splice(index, 1);
+                    scheduleCommit();
                 }
             } else if (event.button === 2) {
                 tempoMarkers.value[index].parentTrack = selectedTrack.value;
                 tempoMarkers.value[index].color = selectedTrack.value.color;
+                scheduleCommit();
             }
         };
 
@@ -624,13 +819,40 @@ export default {
         let markerStartPos;
         let startTempo;
         let tempoIdx = 0;
+        let notesByStart;
+        let notesByEnd;
 
         async function startMarkerAnim() {
             isPlaying.value = true;
             markerStartPos = markerPosition.value;
             startTempo = tempo.value;
             tempoMarkers.value.sort((a, b) => { return a.left - b.left });
+            const audibleNotes = notesInGrid.value.filter(n => !n.muted);
+            notesByStart = [...audibleNotes].sort((a, b) => a.left - b.left);
+            notesByEnd   = [...audibleNotes].sort((a, b) => (a.left + a.width) - (b.left + b.width));
             doMarkerAnim();
+        }
+
+        let startIndex = 0;
+        let endIndex = 0;
+        let changed = false;
+
+        function updateActive(marker) {
+            while (startIndex < notesByStart.length && notesByStart[startIndex].left <= marker) {
+                activeNotes.add(notesByStart[startIndex]);
+                const color = hexToRgba(notesByStart[startIndex].color, 0.5);
+                activePitches.value.set(notesByStart[startIndex].pitch, color);
+                startIndex++;
+                changed = true;
+            }
+            
+            while (endIndex < notesByEnd.length && (notesByEnd[endIndex].left + notesByEnd[endIndex].width) < marker) {
+                activeNotes.delete(notesByEnd[endIndex]);
+                activePitches.value.delete(notesByEnd[endIndex].pitch);
+                endIndex++;
+                changed = true;
+            }
+
         }
 
         function doMarkerAnim() {
@@ -673,152 +895,29 @@ export default {
                 }
                 if (seq.value && !loopSong.value)
                     seq.value.loop = loopSong.value;
+
+                // Get the currently active notes and put them into the "activeNotes" set
+                updateActive(markerPosition.value);
+                if (changed) {
+                    drawOverlay();
+                    changed = false;
+                }
+
             }
             clearInterval(markerInterval);
             tick();
             markerInterval = setInterval(tick, 20);
         }
 
-        const noteLengths = [];
-        const widthCache = {};
-
-        function getUniquePermutations(nums) {
-            nums.sort((a, b) => a - b); // Sort to enable duplicate skipping
-            const used = new Array(nums.length).fill(false);
-            const result = [];
-
-            function backtrack(path) {
-                if (path.length === nums.length) {
-                    result.push([...path]);
-                    return;
-                }
-
-                for (let i = 0; i < nums.length; i++) {
-                    if (used[i]) continue;
-
-                    // Skip duplicate numbers at the same tree depth
-                    if (i > 0 && nums[i] === nums[i - 1] && !used[i - 1]) {
-                        continue;
-                    }
-
-                    used[i] = true;
-                    path.push(nums[i]);
-                    backtrack(path);
-                    path.pop();
-                    used[i] = false;
-                }
-            }
-
-            backtrack([]);
-            return result;
-        }
-
-        function getOptimalNoteLengths(width) {
-            if (width in widthCache)
-                return widthCache[width];
-            let outString = '';
-            let mmlWidth = width;
-
-            if (noteLengths.length === 0) {
-                for (let i = 1; i <= 64; ++i) {
-                    let val1 = Math.round(256 * 32 / (i/960*64) );
-                    let val2 = Math.round(256 * 32 / (i/960*64) * 1.5);
-
-                    noteLengths.push({
-                        length: val2,
-                        name: i + '.',
-                        charLength: ('L' + i + '.').length
-                    });
-                    noteLengths.push({
-                        length: val1,
-                        name: i + '',
-                        charLength: ('L' + i).length
-                    });
-                }
-            }
-
-            const best = new Map();
-            for (const note of noteLengths) {
-                if (!best.has(note.length) || note.charLength < best.get(note.length).charLength) {
-                    best.set(note.length, note);
-                }
-            }
-
-            let result = getMinCharLengthWidth([...best.values()], mmlWidth);
-            outString = result.noteCombination.map(note => note.name).join('&');
-            // Rather than returning a single string combining the notes, we should return a list of such strings (or a list of a list of lengths like lengths: [[1., 2], [2, 1.]])
-            // let outputs = getUniquePermutations(result.noteCombination.map(note => note.name));
-            widthCache[width] = result;
-            return result; // returns a list of lists of note lenths
-        }
-
-        function getMinCharLengthWidth(notes, targetWidth) {
-            let amount = Math.round(targetWidth * 32);
-
-            // === Compress notes to keep only the shortest representation for each length ===
-            const best = new Map();
-            for (const note of notes) {
-                if (!best.has(note.length) || note.charLength < best.get(note.length).charLength) {
-                    best.set(note.length, note);
-                }
-            }
-            const compressedNotes = [...best.values()];
-
-            // Flatten notes into arrays for fast lookup
-            const n = compressedNotes.length;
-            const lengths = new Int32Array(n);
-            const charLens = new Int32Array(n);
-            for (let j = 0; j < n; j++) {
-                lengths[j] = compressedNotes[j].length;
-                charLens[j] = compressedNotes[j].charLength;
-            }
-
-            // === DP arrays ===
-            const INF = 0x7fffffff;
-            const dp = new Uint32Array(amount + 1);
-            dp.fill(INF);
-            dp[0] = 0;
-
-            const prev = new Int32Array(amount + 1);
-            prev.fill(-1);
-
-            const last = new Int32Array(amount + 1);
-            last.fill(-1);
-
-            // === Core DP ===
-            for (let j = 0; j < n; j++) {
-                const noteValue = lengths[j];
-                const noteChars = charLens[j];
-                for (let i = noteValue; i <= amount; i++) {
-                    const candidate = dp[i - noteValue] + noteChars;
-                    if (candidate < dp[i]) {
-                        dp[i] = candidate;
-                        prev[i] = i - noteValue;
-                        last[i] = j;
-                    }
-                }
-            }
-
-            if (dp[amount] === INF) {
-                return { minChars: null, noteCombination: [] };
-            }
-
-            // === Backtrack ===
-            const result = [];
-            let i = amount;
-            while (i > 0) {
-                const j = last[i];
-                result.push(compressedNotes[j]);
-                i = prev[i];
-            }
-
-            return { minChars: dp[amount], noteCombination: result };
-        }
-
-
-        const stopMarkerAnim = () => {
+        const stopMarkerAnim = async () => {
             clearInterval(markerInterval);
             isPlaying.value = false;
+            activeNotes.clear();
+            activePitches.value.clear();
+            startIndex = 0;
+            endIndex = 0;
+            changed = false;
+            drawOverlay();
         }
 
         const updateMarkerPos = (clientX, altKey, fromClick) => {
@@ -844,10 +943,34 @@ export default {
         function handleKeyPress(event) {
             if (selectedTrack.value.isEditingName)
                 return;
+
+            const mod = event.ctrlKey || event.metaKey;
+
+            if (mod && !event.altKey) {
+                const el = event.target;
+                const typing = el && (el.tagName === 'TEXTAREA'
+                    || (el.tagName === 'INPUT' && ['text', 'number', 'search', 'email', 'password', 'url'].includes(el.type)));
+                if (!typing) {
+                    const k = event.key.toLowerCase();
+                    if (k === 'z') {
+                        event.preventDefault();
+                        if (event.shiftKey) redo(); else undo();
+                        return;
+                    }
+                    if (k === 'y') {
+                        event.preventDefault();
+                        redo();
+                        return;
+                    }
+                }
+            }
+
             if (event.key === 'Backspace' || event.key === 'Delete') {
                 for (const note of selectedNotes.value) {
                     removeNote(note, true);
                 }
+
+                scheduleCommit();
 
                 if (isPlaying.value)
                     playSequence();
@@ -883,6 +1006,7 @@ export default {
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -900,6 +1024,7 @@ export default {
                         note.name = noteName;
                         note.pitch = number * 12 % 12 + 12 * (Math.floor(number) + 1);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -915,6 +1040,7 @@ export default {
                         note.start = Math.round(note.left / (256) * (960*4));
                         note.end = Math.round(note.start + note.length);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -927,6 +1053,7 @@ export default {
                         note.start = Math.round(note.left / (256) * (960*4));
                         note.end = Math.round(note.start + note.length);
                     }
+                    scheduleCommit();
                     if (isPlaying.value)
                         playSequence();
                 }
@@ -947,6 +1074,7 @@ export default {
                     noteClipboard.push(note);
                     removeNote(note, true);
                 }
+                scheduleCommit();
                 if (isPlaying.value)
                     playSequence();
                 showSuccessMessage(`Cut ${noteClipboard.length} note${noteClipboard.length > 1 ? 's' : ''} and put them in the clipboard!`, 1000);
@@ -991,6 +1119,7 @@ export default {
                 selectedNotes.value.push(...newNotes);
                 notesInGrid.value.push(...newNotes);
                 track.notes.unshift(...newNotes.reverse()); // unshift in correct order
+                scheduleCommit();
                 if (isPlaying.value)
                     playSequence();
 
@@ -1008,7 +1137,7 @@ export default {
                 });
 
                 selectedTrack.value.notes.unshift(...[...selectedNotes.value].reverse());
-
+                scheduleCommit();
                 showSuccessMessage(`Moved ${selectedNotes.value.length} notes into track "${selectedTrack.value.name}"!`, 1000);
             }
         }
@@ -1018,8 +1147,8 @@ export default {
             if (gridWrapper.value && ruler.value) {
                 scrollX.value = gridWrapper.value.scrollLeft;
                 ruler.value.style.left = -scrollX.value + 'px'; // Adjust ruler's left position
+                drawCanvasGrid();
             }
-            drawCanvasGrid();
         }
 
         function stopPlaying() {
@@ -1152,12 +1281,13 @@ export default {
             }
         };
 
+        let successTimer = null, failureTimer = null;
         const showSuccessMessage = (text, timeout = 2000) => {
             successNotificationText.value = text;
             showSuccessNotification.value = true; // Show notification
-
+            clearTimeout(successTimer);
             // Hide notification after 2 seconds
-            setTimeout(() => {
+            successTimer = setTimeout(() => {
                 showSuccessNotification.value = false;
             }, timeout);
         };
@@ -1165,9 +1295,9 @@ export default {
         const showFailureMessage = (text, timeout = 2000) => {
             failedNotificationText.value = text;
             showFailedNotification.value = true; // Show notification
-
+            clearTimeout(failureTimer);
             // Hide notification after 2 seconds
-            setTimeout(() => {
+            failureTimer = setTimeout(() => {
                 showFailedNotification.value = false;
             }, timeout);
         };
@@ -1194,6 +1324,8 @@ export default {
                 synth.value.programChange(selectedTrackIndex.value, selectedInstrument.value.program);
                 if (isPlaying.value && !fromTrack)
                     playSequence();
+
+                if (!fromTrack) scheduleCommit();
 
                 await synth.value.isReady;
             }
@@ -1370,6 +1502,7 @@ export default {
             document.removeEventListener('mousemove', onDrag);
             document.removeEventListener('mouseup', endDrag);
             startPositions.clear();
+            scheduleCommit();
         };
 
         const startResizeData = new Map();
@@ -1444,6 +1577,7 @@ export default {
             startResizeData.clear();
             document.removeEventListener('mousemove', onResize);
             document.removeEventListener('mouseup', endResize);
+            scheduleCommit();
         };
 
         let startingNoteVolumes = [];
@@ -1489,6 +1623,7 @@ export default {
                 playSequence();
             document.removeEventListener('mousemove', onVolumeChange);
             document.removeEventListener('mouseup', endVolumeChange);
+            scheduleCommit();
         };
 
         const handleGridClick = (event) => {
@@ -1835,406 +1970,6 @@ export default {
             });
         }
 
-        function optimDijkstra(tokens) {
-            // An early exit Dijkstra's algorithm
-            // Priority Queue worklist to which I add nodes whose priority is the total distance to reach that node.
-            // uniform cost search
-            const n = tokens.length;
-            // if depth = n then stop and return the string from the parents of the shortest path.
-
-            class GraphNode {
-                constructor (textValue, implicitOct, implicitLen, implicitVol) {
-                    this.implicitOct = implicitOct;
-                    this.implicitLen = implicitLen;
-                    this.implicitVol = implicitVol;
-                    this.parent = null;
-                    this.children = [];
-                    this.textValue = textValue;
-                    this.accCost = textValue.length;
-                    this.depth = 0;
-                }
-
-                addChild(child) {
-                    this.children.push(child);
-                    child.parent = this;
-                    child.accCost += this.accCost;
-                    child.depth = this.depth + 1;
-                }
-
-            }
-
-            function stateKey(depth, len, oct, vol) {
-                return `${depth}|${len}|${oct}|${vol}`;
-            }
-
-            const bestCost = new Map();
-
-            const startNode = new GraphNode('', 4, 960, 8);
-            const worklist = new Heap((a, b) => a.priority - b.priority);
-            let endNode = null;
-            worklist.push( {node: startNode, priority: 0} );
-
-            while (worklist.size() > 0) {
-                const { node: u, priority } = worklist.pop();
-                const key = stateKey(u.depth, u.implicitLen, u.implicitOct, u.implicitVol);
-
-                if (bestCost.has(key) && bestCost.get(key) <= priority) continue;
-                bestCost.set(key, priority);
-
-                const d = u.depth;
-                const token = tokens[d];
-                const tl = token?.length;
-                const td = token?.dotted;
-                const lengthString = Math.floor((960 * 4) / tl * (td ? 1.5 : 1)) + (td ? '.' : '');
-                let suffixLengthString = lengthString;
-                if (tl === u.implicitLen * 1.5 && td) {
-                    suffixLengthString = '.';
-                }
-
-                if (d === n) {
-                    endNode = u;
-                    break;
-                }
-
-                // create the children then add them to the worklist.
-                if (token.type === 'NOTE') {
-                    let octaveString = '';
-                    let volumeString = token.volume === u.implicitVol ? '' : `V${token.volume}`;
-
-                    let octaveDiff = token.octave - u.implicitOct;
-
-                    let isTied = token.name.startsWith('&');
-
-
-                    if (Math.abs(octaveDiff) > 2) {
-                        octaveString = `o${token.octave}`;
-                    } else {
-                        octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
-                    }
-
-                    if (token.length === u.implicitLen) {
-                        u.addChild(new GraphNode(`${volumeString}${octaveString}${token.name}`, token.octave, u.implicitLen, token.volume));
-
-                        if (!isTied)
-                            u.addChild(new GraphNode(`${volumeString}N${token.pitch}`, u.implicitOct, u.implicitLen, token.volume));
-
-                        if (token.name === 'b') {
-                            octaveDiff = (token.octave+1) - u.implicitOct;
-                            if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
-                            } else {
-                                octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
-                            }
-                            u.addChild(new GraphNode(`${volumeString}${octaveString}c-`, token.octave + 1, u.implicitLen, token.volume));
-                        }
-
-                        if (token.name === 'c') {
-                            octaveDiff = (token.octave-1) - u.implicitOct;
-                            if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
-                            } else {
-                                octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
-                            }
-                            u.addChild(new GraphNode(`${volumeString}${octaveString}b+`, token.octave - 1, u.implicitLen, token.volume));
-                        }
-
-                    } else {
-                        u.addChild(new GraphNode(`${volumeString}L${lengthString}${octaveString}${token.name}`, token.octave, token.length, token.volume));
-                        u.addChild(new GraphNode(`${volumeString}${octaveString}${token.name}${suffixLengthString}`, token.octave, u.implicitLen, token.volume));
-
-                        if (token.name === 'b') {
-                            octaveDiff = (token.octave+1) - u.implicitOct;
-                            if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
-                            } else {
-                                octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
-                            }
-                            u.addChild(new GraphNode(`${volumeString}L${lengthString}${octaveString}c-`, token.octave + 1, token.length, token.volume));
-                            u.addChild(new GraphNode(`${volumeString}${octaveString}c-${suffixLengthString}`, token.octave + 1, u.implicitLen, token.volume));
-                        }
-
-                        if (token.name === 'c') {
-                            octaveDiff = (token.octave-1) - u.implicitOct;
-                            if (Math.abs(octaveDiff) > 2) {
-                                octaveString = `o${token.octave}`;
-                            } else {
-                                octaveString = (octaveDiff > 0 ? '>' : '<').repeat(Math.abs(octaveDiff));
-                            }
-                            u.addChild(new GraphNode(`${volumeString}L${lengthString}${octaveString}b+`, token.octave - 1, token.length, token.volume));
-                            u.addChild(new GraphNode(`${volumeString}${octaveString}b+${suffixLengthString}`, token.octave - 1, u.implicitLen, token.volume));
-                        }
-
-                        if (!isTied)
-                            u.addChild(new GraphNode(`${volumeString}L${lengthString}N${token.pitch}`, u.implicitOct, token.length, token.volume));
-                        
-                    }
-                } else if (token.type === 'REST') {
-                    if (token.length === u.implicitLen) {
-                        u.addChild(new GraphNode(`${token.name}`, u.implicitOct, u.implicitLen, u.implicitVol));
-                    } else {
-                        u.addChild(new GraphNode(`L${lengthString}${token.name}`, u.implicitOct, token.length, u.implicitVol));
-                        u.addChild(new GraphNode(`${token.name}${suffixLengthString}`, u.implicitOct, u.implicitLen, u.implicitVol));
-                    }
-                } else if (token.type === 'TEMPO') {
-                    u.addChild(new GraphNode(`T${token.tempo}`, u.implicitOct, u.implicitLen, u.implicitVol));
-                }
-
-                for (const child of u.children) {
-                    worklist.push({node: child, priority: child.accCost});
-                }
-
-            }
-
-            // Rebuild string with list from recursively checking parents.
-            const pieces = [];
-            let currentNode = endNode;
-            while (currentNode !== null) {
-                pieces.push(currentNode.textValue);
-                currentNode = currentNode.parent;
-            }
-
-            return pieces.reverse().join('');
-
-        }
-
-        function OxLxTokensDP(tokens) {
-            const n = tokens.length;
-
-            // All possible lengths and octaves we may encounter
-            const lengths = new Set(['4', ...tokens.filter(t => t.type !== 'TEMPO').map(t => t.lengthString)]);
-            const octaves = new Set(tokens.filter(t => t.type === 'NOTE').map(t => t.octave));
-            octaves.add(4);
-
-            const dp = {};
-            const action = {};
-
-            function getDP(i, len, oct) {
-                return dp[i]?.[len]?.[oct] ?? Infinity;
-            }
-
-            function setDP(i, len, oct, val, act) {
-                dp[i] ??= {};
-                dp[i][len] ??= {};
-                dp[i][len][oct] = val;
-
-                action[i] ??= {};
-                action[i][len] ??= {};
-                action[i][len][oct] = act;
-            }
-
-            // Base case: finishing at end has 0 cost
-            for (const len of lengths) {
-                for (const oct of octaves) {
-                    setDP(n, len, oct, 0, null);
-                }
-            }
-
-            // Helper: compute encoding cost/options for a note/rest in current state
-            function encodingsFor(lengthString, curLen, tie, noteName, notePitch, useTies) {
-                const results = [];
-
-                const isDotted = lengthString.endsWith('.');
-                const undotted = isDotted ? lengthString.slice(0, -1) : lengthString;
-                const tieString = tie ? '&' : '';
-
-                // Implicit (length same as current)
-                if (lengthString === curLen) {
-                    if (noteName) {
-                        const implicit = tieString + noteName;
-                        results.push({
-                            spelling: implicit,
-                            newLen: curLen,
-                            cost: implicit.length,
-                            type: 'implicit'
-                        });
-                    } else {
-                        const implicit = tieString + 'r';
-                        results.push({
-                            spelling: implicit,
-                            newLen: curLen,
-                            cost: implicit.length,
-                            type: 'implicit'
-                        });
-                    }
-                }
-
-                // Switch (change L then note)
-                const sw = 'L' + lengthString + tieString + (noteName || 'r');
-                results.push({
-                    spelling: tieString + (noteName || 'r'),
-                    newLen: lengthString,
-                    cost: sw.length,
-                    type: 'switch',
-                    needLengthCmd: true
-                });
-
-                // Explicit (append undotted)
-                if (noteName) {
-                    const ex = tieString + noteName + undotted;
-                    results.push({
-                        spelling: ex,
-                        newLen: curLen,
-                        cost: ex.length,
-                        type: 'explicit'
-                    });
-                }
-
-                // Pitch-notation (when useTies and we have pitch)
-                if (useTies && notePitch !== undefined) {
-                    if (lengthString === curLen) {
-                        const usePitch = tieString + `N${notePitch}`;
-                        results.push({
-                            spelling: usePitch,
-                            newLen: curLen,
-                            cost: usePitch.length,
-                            type: 'pitchImplicit',
-                            pitch: notePitch
-                        });
-                    }
-                    const exPitch = `L${lengthString}${tieString}N${notePitch}`;
-                    results.push({
-                        spelling: tieString + `N${notePitch}`,
-                        newLen: lengthString,
-                        cost: exPitch.length,
-                        type: 'pitchSwitch',
-                        pitch: notePitch,
-                        needLengthCmd: true
-                    });
-                }
-
-                return results;
-            }
-
-            // Bottom-up DP
-            for (let i = n - 1; i >= 0; i--) {
-                const token = tokens[i];
-                for (const len of lengths) {
-                    for (const oct of octaves) {
-                        let best = Infinity;
-                        let bestAct = null;
-
-                        if (token.type === 'REST') {
-                            const options = encodingsFor(token.lengthString, len, false, null, null, false);
-                            for (const opt of options) {
-                                const cand = opt.cost + getDP(i + 1, opt.newLen, oct);
-                                if (cand < best) {
-                                    best = cand;
-                                    bestAct = { type: 'rest', ...opt };
-                                }
-                            }
-
-                        } else if (token.type === 'NOTE') {
-                            const spellings = [];
-
-                            // Normal spelling
-                            spellings.push({ name: token.name, oct: token.octave });
-
-                            // Enharmonics
-                            if (token.name.toLowerCase() === 'b' && token.octave + 1 <= 8) {
-                                spellings.push({ name: 'c-', oct: token.octave + 1 });
-                            }
-                            if (token.name.toLowerCase() === 'c' && token.octave - 1 >= 0) {
-                                spellings.push({ name: 'b+', oct: token.octave - 1 });
-                            }
-
-                            for (const sp of spellings) {
-                                const options = encodingsFor(token.lengthString, len, false, sp.name, token.pitch, true);
-
-                                for (const opt of options) {
-                                    // A) Implicit octave (same as current)
-                                    const isPitchNotation = opt.type.startsWith('pitch');
-                                    if (isPitchNotation || sp.oct === oct) {
-                                        const cand = opt.cost + getDP(i + 1, opt.newLen, oct);
-                                        if (cand < best) {
-                                            best = cand;
-                                            bestAct = { type: 'spell', newOct: oct, ...opt };
-                                        }
-                                    }
-
-                                    if (isPitchNotation) continue;
-
-                                    // B) Relative octave (within ±2)
-                                    const diff = sp.oct - oct;
-                                    if (Math.abs(diff) <= 2 && diff !== 0) {
-                                        const relPrefix = (diff > 0 ? '>' : '<').repeat(Math.abs(diff));
-                                        const cand = relPrefix.length + opt.cost + getDP(i + 1, opt.newLen, sp.oct);
-                                        if (cand < best) {
-                                            best = cand;
-                                            bestAct = { type: 'spell+relOct', shift: diff, newOct: sp.oct, ...opt };
-                                        }
-                                    }
-
-                                    // C) Absolute octave
-                                    const absPrefix = `o${sp.oct}`;
-                                    const cand = absPrefix.length + opt.cost + getDP(i + 1, opt.newLen, sp.oct);
-                                    if (cand < best) {
-                                        best = cand;
-                                        bestAct = { type: 'spell+absOct', newOct: sp.oct, ...opt };
-                                    }
-                                }
-                            }
-                        }
-
-                        setDP(i, len, oct, best, bestAct);
-                    }
-                }
-            }
-
-            // Rebuild token list
-            let implicitLen = '4';
-            let implicitOct = 4;
-            const output = [];
-
-            for (let i = 0; i < tokens.length; i++) {
-                const token = tokens[i];
-                if (token.type === 'TEMPO') {
-                    output.push(token);
-                    continue;
-                }
-
-                const a = action[i][implicitLen][implicitOct];
-                if (!a) continue;
-
-                if (a.newOct !== undefined && a.type !== 'spell') {
-                    let text;
-                    if (a.type === 'spell+absOct') {
-                        text = `o${a.newOct}`;
-                    } else if (a.type === 'spell+relOct') {
-                        const shift = a.shift;
-                        text = (shift > 0 ? '>' : '<').repeat(Math.abs(shift));
-                    }
-                    output.push({ type: 'OCTAVE', start: token.start, text });
-                    implicitOct = a.newOct;
-                }
-
-                if (a.needLengthCmd) {
-                    output.push({
-                        type: 'LENGTH',
-                        start: token.start,
-                        lengthString: a.newLen,
-                        length: Number(a.newLen),
-                        dotted: a.newLen.endsWith('.')
-                    });
-                    implicitLen = a.newLen;
-                }
-
-                output.push({
-                    type: token.type,
-                    start: token.start,
-                    name: a.spelling,
-                    lengthString: a.newLen,
-                    length: Number(a.newLen),
-                    dotted: a.newLen.endsWith('.'),
-                    tie: false,
-                    pitch: a.pitch
-                });
-
-                implicitLen = a.newLen;
-            }
-
-            return output;
-        }
-
         const getTrackTokens = (track) => {
             let tokens = [];
             // Add Note tokens to list
@@ -2286,13 +2021,7 @@ export default {
                 });
             }
 
-            tokens.sort((a, b) => {
-                if (a.start - b.start === 0) {
-                    if (a.type === 'TEMPO')
-                        return -1
-                }
-                return a.start - b.start;
-            });
+            tokens.sort((a, b) => a.start - b.start || (b.type === 'TEMPO') - (a.type === 'TEMPO'));
 
             // Add Rests between notes and tempo markers
             for (let i = -1; i < tokens.length - 1; ++i) {
@@ -2381,47 +2110,6 @@ export default {
         function renderTokens(tokenList) {
             const outputText = renderTrackTokens(tokenList);
             return outputText;
-        }
-
-        function getEnharmonicEquivalent(note) {
-            if (note.length === 1)
-                return note;
-            let root = note[0];
-            let accidental = note[1];
-            let noteIndex = noteNames.indexOf(root);
-            if (accidental === '#' || accidental === '+') {
-                noteIndex = (noteIndex + 1) % 12;
-            } else if (accidental === '-') {
-                noteIndex = ((noteIndex - 1) % 12 + 12) % 12;
-            }
-            return noteNames[noteIndex];
-        }
-
-        const patterns = {
-            LENGTH: /[Ll](\d+)\.?/g,  // Matches note lengths, e.g., L4, L8.
-            NOTE: /[a-gA-G][-+#]?\d*\.?|N\d+/g,         // Matches notes like N60, N62.
-            REST: /[Rr]\d*\.?/g,      // Matches rests like R4, R8.
-            TIE: /&/g,              // Matches ties.
-            VOLUME: /[Vv](\d+)/g,
-            TEMPO: /[Tt](\d+)/g,
-            OCTAVE: /[Oo](\d+)|[<>]/g
-        };
-
-        function tokenizeMML(mmlString) {
-            let tokens = [];
-
-            // Run regex patterns over the input
-            for (const [key, regex] of Object.entries(patterns)) {
-                let match;
-                while ((match = regex.exec(mmlString)) !== null) {
-                    tokens.push({ type: key, value: match[0], index: match.index });
-                }
-            }
-
-            // Sort tokens by their original index in the string
-            tokens.sort((a, b) => { return a.index - b.index });
-
-            return tokens;
         }
 
         function mmlToNewTrack(title, mmlTokens) {
@@ -2961,6 +2649,7 @@ export default {
             autoScrollSong,
             parseMMLFromClipboard,
             gridCanvas,
+            overlayCanvas,
             windowWidth,
             scrollX,
             gridWrapper,
@@ -2968,7 +2657,13 @@ export default {
             importMidi,
             exportMidi,
             copyToClipboard,
-            preserveHighNotes
+            preserveHighNotes,
+            activePitches,
+            undo,
+            redo,
+            canUndo,
+            canRedo,
+            onGridMouseUp
         };
     }
 };
@@ -3022,7 +2717,7 @@ export default {
     flex-direction: column-reverse;
     padding-bottom: 18px;
     /* Higher notes at the top */
-    z-index: 12;
+    z-index: 13;
 }
 
 .octave {
@@ -3097,7 +2792,7 @@ export default {
     align-items: end;
     font-size: 12px;
     color: #333;
-    z-index: 11;
+    z-index: 12;
     user-select: none;
     cursor: pointer;
 }
@@ -3328,6 +3023,13 @@ export default {
     margin-top: 30px;
     display: block;
     z-index: 10;
+    left: 0px;
+}
+
+.overlayCanvas {
+    margin-top: 30px;
+    display: block;
+    z-index: 11;
     left: 0px;
 }
 </style>

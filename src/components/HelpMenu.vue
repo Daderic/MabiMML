@@ -13,7 +13,19 @@
           <button class="close-button" @click="closeHelp">X</button>
           <div class="help-content" @click.stop>
             <h1>Help</h1>
-            <p class="credits">MOS v1.3</p>
+            <p class="credits">MOS v1.4</p>
+
+            <h3>Changelog</h3>
+            <h4>v1.4 (11/21/2026)</h4>
+            <ul>
+              <li>Added undo/redo.</li>
+              <li>Added the Bass and Gayageum instruments.</li>
+              <li>Added row highlighting when a note plays (in it's tracks color) and even if the note is off-screen.</li>
+              <li>Fixed a rare octave error in exported MML for B and C notes after large octave jumps.</li>
+              <li>Fixed tempo changes sometimes landing after a note that starts at the same moment.</li>
+              <li>Fixed rounding for unusual note lengths in exported MML.</li>
+              <li>Fixed the melody limit for rank F* in Jabchiel export (it was 553, now 533).</li>
+            </ul>
 
             <h3>Navigating the Grid</h3>
             <ul>
@@ -171,6 +183,19 @@
               <li>Imported songs will automatically be quantized to the nearest 64th note boundary.</li>
             </ul>
 
+            <h3>Undo / Redo</h3>
+            <ul>
+              <li>Press <strong>Ctrl+Z</strong> to undo, and <strong>Ctrl+Y</strong> or <strong>Ctrl+Shift+Z</strong>
+                to redo. (The Undo and Redo buttons at the top do the same thing.)</li>
+              <li>Placing, moving, resizing, changing volume, deleting, cutting, pasting, cloning, and moving notes
+                between tracks can all be undone.</li>
+              <li>Adding or removing tracks, changing a track's color or instrument, tempo markers, auto-split tracks, and imports can
+                also be undone.</li>
+              <li>A track rename can be undone if you press <strong>Ctrl+Z</strong> right after renaming it.</li>
+              <li>Muting, zoom, selection, and the starting tempo box are not part of the undo history.</li>
+              <li>The history keeps about the last 100 steps and is cleared when you reload the page.</li>
+            </ul>
+
             <h3>Tempo</h3>
             <ul>
               <li>You can change the tempo by entering a number at the top left of the page. Note that this will only
@@ -201,7 +226,6 @@
 
             <h3>Planned Features</h3>
             <ul>
-              <li>Undo/Redo functionality.</li>
               <li>Support for saving/loading "projects".</li>
               <li>Improved note rendering speed.</li>
               <li>Additional playback buttons.</li>
